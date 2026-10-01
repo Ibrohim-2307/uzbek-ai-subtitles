@@ -7,7 +7,7 @@ Ushbu qoidalar har qanday agent, dasturchi yoki avtomatlashtirilgan vosita uchun
 ---
 
 ## 1. REGRESSIYA HIMOYASI VA TEST ETALONI
-- **Test etaloni: 12 ta to'plam, 502 ta tekshiruv, 100% yashil (0 yiqilgan).**
+- **Test etaloni: 12 ta to'plam, 510 ta tekshiruv, 100% yashil (0 yiqilgan).**
   Har qanday kod o'zgarishidan keyin:
   - Windows: `scripts\run_all_tests.bat`
   - Linux / Git Bash: `bash scripts/run_all_tests.sh`

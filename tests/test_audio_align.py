@@ -1,6 +1,6 @@
 """
 tests/test_audio_align.py - Global ASR Lag & Audio Alignment Tests (Suite 11)
-23 ta qat'iy tekshiruv:
+31 ta qat'iy tekshiruv:
 1. Global siljishni aniqlash (-410ms, -250ms, -700ms, +300ms)
 2. Yolg'on-musbat filtrlari (30 ta tasodifiy holat, tartib buzilishi, sukut, chegara > 1.2s)
 3. Haqiqiy audio o'lchovi va snap_word_timestamps_to_audio integratsiyasi
@@ -301,6 +301,110 @@ class TestAudioAlign(unittest.TestCase):
     def test_23_fps_quantization_on_frame(self):
         for rw in self.refined:
             self.assertTrue(is_on_frame(rw["start"], 25.0))
+
+    # 24. Valid onsets attack sakrashi (>= 2.2x)
+    def test_24_valid_onsets_attack_ratio(self):
+        time_axis = np.linspace(0, 1.0, 100)
+        energy = np.zeros(100, dtype=np.float32)
+        energy[0:30] = 0.001
+        energy[30] = 0.015
+        energy[31:60] = 0.060
+        energy[60:100] = 0.001
+        res = detect_pauses_and_onsets(energy, time_axis, min_pause_ms=100.0)
+        self.assertGreater(len(res["onsets"]), 0)
+        self.assertGreater(len(res["valid_onsets"]), 0)
+        self.assertIn(res["onsets"][0], res["valid_onsets"])
+
+    # 25. Zaif energiyali onset valid_onsets dan chetlatilishi (< 2.2x)
+    def test_25_weak_energy_onset_excluded(self):
+        time_axis = np.linspace(0, 1.0, 100)
+        energy = np.zeros(100, dtype=np.float32)
+        energy[0:30] = 0.005
+        energy[30:60] = 0.009
+        energy[60:100] = 0.005
+        res = detect_pauses_and_onsets(energy, time_axis, min_pause_ms=100.0)
+        self.assertEqual(len(res["valid_onsets"]), 0)
+
+    # 26. Keng snap (450ms) faollashishi (+350ms siljish, >= 60ms)
+    def test_26_wide_snap_450ms_activation(self):
+        words = [{"word": "test", "start": 1.0, "end": 1.4}]
+        refined, stats = snap_word_timestamps_to_audio(
+            words,
+            search_window_ms=150.0,
+            custom_onsets=[1.35],
+            custom_valid_onsets=[1.35]
+        )
+        self.assertEqual(refined[0]["start"], 1.35)
+
+    # 27. Keng snap kichik siljishda (< 60ms) qo'llanmasligi
+    def test_27_wide_snap_minor_shift_ignored(self):
+        words = [{"word": "test", "start": 1.0, "end": 1.4}]
+        refined, stats = snap_word_timestamps_to_audio(
+            words,
+            search_window_ms=30.0,
+            custom_onsets=[1.04],
+            custom_valid_onsets=[1.04]
+        )
+        self.assertEqual(refined[0]["start"], 1.0)
+
+    # 28. 1:1 Onset Binding (so'zlar soni == valid onsetlar soni va monoton)
+    def test_28_one_to_one_onset_binding(self):
+        words = [
+            {"word": "Assalomu", "start": 1.25, "end": 1.65},
+            {"word": "alaykum", "start": 2.25, "end": 2.75},
+            {"word": "do'stlar", "start": 3.25, "end": 3.65}
+        ]
+        onsets = [1.0, 2.0, 3.0]
+        refined, stats = snap_word_timestamps_to_audio(
+            words,
+            custom_valid_onsets=onsets,
+            custom_onsets=onsets
+        )
+        self.assertTrue(stats.get("one_to_one_bound"))
+        self.assertEqual(refined[0]["start"], 1.0)
+        self.assertEqual(refined[1]["start"], 2.0)
+        self.assertEqual(refined[2]["start"], 3.0)
+
+    # 29. 1:1 Onset Binding soni mos kelmasa o'tkazib yuborilishi
+    def test_29_one_to_one_count_mismatch(self):
+        words = [
+            {"word": "bir", "start": 1.0, "end": 1.3},
+            {"word": "ikki", "start": 2.0, "end": 2.3},
+            {"word": "uch", "start": 3.0, "end": 3.3}
+        ]
+        onsets = [1.0, 2.0]
+        refined, stats = snap_word_timestamps_to_audio(
+            words,
+            custom_valid_onsets=onsets,
+            custom_onsets=onsets
+        )
+        self.assertFalse(stats.get("one_to_one_bound"))
+
+    # 30. 1:1 Onset Binding davomiylikni aniq saqlashi
+    def test_30_one_to_one_duration_preserved(self):
+        words = [
+            {"word": "birinchi", "start": 1.2, "end": 1.7},
+            {"word": "ikkinchi", "start": 2.3, "end": 3.1}
+        ]
+        onsets = [1.0, 2.0]
+        refined, stats = snap_word_timestamps_to_audio(
+            words,
+            custom_valid_onsets=onsets,
+            custom_onsets=onsets
+        )
+        self.assertTrue(stats.get("one_to_one_bound"))
+        dur0 = round(refined[0]["end"] - refined[0]["start"], 2)
+        dur1 = round(refined[1]["end"] - refined[1]["start"], 2)
+        self.assertEqual(dur0, 0.5)
+        self.assertEqual(dur1, 0.8)
+
+    # 31. Audio tayyorlashda imageio-ffmpeg integratsiyasi
+    def test_31_audio_prepare_imageio_ffmpeg(self):
+        from backend.utils.audio import check_ffmpeg, get_ffmpeg_binary
+        self.assertTrue(check_ffmpeg())
+        ffmpeg_bin = get_ffmpeg_binary()
+        self.assertIsNotNone(ffmpeg_bin)
+        self.assertTrue(os.path.exists(ffmpeg_bin))
 
 
 if __name__ == "__main__":

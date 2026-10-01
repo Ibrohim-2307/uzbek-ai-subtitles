@@ -156,7 +156,7 @@ def detect_pauses_and_onsets(
     return {
         "pauses": pauses,
         "onsets": onsets,
-        "valid_onsets": valid_onsets if valid_onsets else onsets,
+        "valid_onsets": valid_onsets,
         "offsets": offsets,
         "noise_floor": round(noise_floor, 5),
         "speech_threshold": round(speech_threshold, 5)
@@ -310,14 +310,18 @@ def snap_word_timestamps_to_audio(
     search_window_ms: float = 150.0,
     min_word_dur_ms: float = 80.0,
     min_pause_ms: float = 200.0,
-    fps: Optional[float] = None
+    fps: Optional[float] = None,
+    custom_onsets: Optional[List[float]] = None,
+    custom_valid_onsets: Optional[List[float]] = None,
+    custom_offsets: Optional[List[float]] = None,
+    custom_pauses: Optional[List[Tuple[float, float]]] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     So'zlarning start va end vaqtlarini audio energiyasiga qarab aniqlashtiradi (snap).
     Qaytaradi: (aniqlangan_sozlar, statistika)
     """
     if not words:
-        return [], {"snapped_count": 0, "avg_shift_ms": 0.0, "max_shift_ms": 0.0, "pauses_found": 0, "global_offset_sec": 0.0, "global_offset_ms": 0.0, "global_offset_applied": False, "support_count": 0}
+        return [], {"snapped_count": 0, "avg_shift_ms": 0.0, "max_shift_ms": 0.0, "pauses_found": 0, "global_offset_sec": 0.0, "global_offset_ms": 0.0, "global_offset_applied": False, "support_count": 0, "one_to_one_bound": False}
 
     # Boshlang'ich start vaqtlarini saqlab olamiz (haqiqiy siljish statistikasini hisoblash uchun)
     initial_starts = []
@@ -332,7 +336,6 @@ def snap_word_timestamps_to_audio(
     onsets = []
     offsets = []
     pauses = []
-
     valid_onsets = []
 
     if has_audio:
@@ -340,11 +343,27 @@ def snap_word_timestamps_to_audio(
             energy, time_axis, sr = compute_energy_envelope(wav_path, frame_ms=10.0, hop_ms=10.0)
             analysis = detect_pauses_and_onsets(energy, time_axis, min_pause_ms=min_pause_ms)
             onsets = analysis["onsets"]
-            valid_onsets = analysis.get("valid_onsets", onsets)
+            valid_onsets = analysis.get("valid_onsets", [])
             offsets = analysis["offsets"]
             pauses = analysis["pauses"]
         except Exception as e:
             print(f"[Audio Aligner] Ovoz energiyasini tahlil qilishda xatolik: {e}")
+
+    if custom_onsets is not None:
+        onsets = list(custom_onsets)
+        has_audio = True
+    if custom_valid_onsets is not None:
+        valid_onsets = list(custom_valid_onsets)
+        has_audio = True
+    if custom_offsets is not None:
+        offsets = list(custom_offsets)
+    if custom_pauses is not None:
+        pauses = list(custom_pauses)
+
+    if not valid_onsets and onsets:
+        valid_onsets = onsets
+    elif not onsets and valid_onsets:
+        onsets = valid_onsets
 
     global_offset_sec = 0.0
     global_offset_applied = False
@@ -367,6 +386,13 @@ def snap_word_timestamps_to_audio(
     refined_words = []
     shifts = []
 
+    # 0.5-QADAM: 1:1 Onset Binding (agar so'zlar soni va valid_onsets soni teng bo'lsa)
+    one_to_one_bound = False
+    if has_audio and valid_onsets and len(words) == len(valid_onsets) and len(words) >= 2:
+        is_monotonic = all(valid_onsets[k] < valid_onsets[k+1] for k in range(len(valid_onsets)-1))
+        if is_monotonic:
+            one_to_one_bound = True
+
     for idx, w in enumerate(words):
         w_word = getattr(w, "word", None) or (w.get("word") if isinstance(w, dict) else str(w))
         orig_start = float(getattr(w, "start", 0) if hasattr(w, "start") else w.get("start", 0))
@@ -376,27 +402,32 @@ def snap_word_timestamps_to_audio(
         cur_start = orig_start
         cur_end = orig_end
 
-        # 1. Start vaqtini eng yaqin onset'ga tortish (±150 ms yoki keng 450 ms)
-        if onsets:
-            cands = [o for o in onsets if abs(o - orig_start) <= window_sec]
-            if cands:
-                # Eng yaqin onset
-                best_onset = min(cands, key=lambda o: abs(o - orig_start))
-                cur_start = best_onset
-            elif valid_onsets:
-                # Keng snap (450 ms): agar 150 ms da topilmasa, lekin valid onset 450 ms da bo'lsa
-                wide_cands = [o for o in valid_onsets if abs(o - orig_start) <= 0.450]
-                if wide_cands:
-                    best_wide = min(wide_cands, key=lambda o: abs(o - orig_start))
-                    if abs(best_wide - orig_start) >= 0.06:
-                        cur_start = best_wide
+        if one_to_one_bound:
+            cur_start = valid_onsets[idx]
+            dur = max(orig_end - orig_start, min_dur_sec)
+            cur_end = cur_start + dur
+        else:
+            # 1. Start vaqtini eng yaqin onset'ga tortish (±150 ms yoki keng 450 ms)
+            if onsets:
+                cands = [o for o in onsets if abs(o - orig_start) <= window_sec]
+                if cands:
+                    # Eng yaqin onset
+                    best_onset = min(cands, key=lambda o: abs(o - orig_start))
+                    cur_start = best_onset
+                elif valid_onsets:
+                    # Keng snap (450 ms): agar 150 ms da topilmasa, lekin valid onset 450 ms da bo'lsa
+                    wide_cands = [o for o in valid_onsets if abs(o - orig_start) <= 0.450]
+                    if wide_cands:
+                        best_wide = min(wide_cands, key=lambda o: abs(o - orig_start))
+                        if abs(best_wide - orig_start) >= 0.06:
+                            cur_start = best_wide
 
-        # 2. End vaqtini eng yaqin offset'ga tortish (±150 ms)
-        if offsets:
-            cands_end = [off for off in offsets if abs(off - orig_end) <= window_sec]
-            if cands_end:
-                best_offset = min(cands_end, key=lambda off: abs(off - orig_end))
-                cur_end = best_offset
+            # 2. End vaqtini eng yaqin offset'ga tortish (±150 ms)
+            if offsets:
+                cands_end = [off for off in offsets if abs(off - orig_end) <= window_sec]
+                if cands_end:
+                    best_offset = min(cands_end, key=lambda off: abs(off - orig_end))
+                    cur_end = best_offset
 
         # 3. Sukut/pauza bilan to'qnashuvni tekshirish
         # So'z hech qachon aniqlangan sukut oralig'iga kirib ketmasin
@@ -463,7 +494,8 @@ def snap_word_timestamps_to_audio(
         "global_offset_sec": round(global_offset_sec, 3),
         "global_offset_ms": round(global_offset_sec * 1000.0, 1),
         "global_offset_applied": global_offset_applied,
-        "support_count": support_count
+        "support_count": support_count,
+        "one_to_one_bound": one_to_one_bound
     }
 
     return refined_words, stats

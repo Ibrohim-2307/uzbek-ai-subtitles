@@ -18,7 +18,7 @@ Oldingi bosqichlarda qilingan ishlar **saqlanib qolishi shart**. Ya'ni:
 1. **Faylni butunlay qayta yozish taqiqlanadi.** Faqat kerakli joyni `patch` qiling
    (aniq matn topib, o'sha joyni almashtirish).
 2. **Test fayllarini o'chirmang, kamaytirmang, "soddalashtirmang".**
-   Hozir 12 to'plamda **502 ta tekshiruv** bor — u kamaymasligi kerak.
+   Hozir 12 to'plamda **510 ta tekshiruv** bor — u kamaymasligi kerak.
 3. **Ishlayotgan funksiyalarni nomini o'zgartirmang.** Panel va host shu nomlarga
    bog'langan (`buildWordPlan`, `rechunkSegments`, `snapToFrame`, `detectBeats`,
    `ae_createSubtitles`, `beatsForTimeline`, `clipInfo`, `getSelectedClip`,
@@ -35,7 +35,7 @@ Oldingi bosqichlarda qilingan ishlar **saqlanib qolishi shart**. Ya'ni:
    bash scripts/run_all_tests.sh          # Linux/macOS/Git Bash
    scripts\run_all_tests.bat              # Windows
    ```
-   Etalon: **502 ta tekshiruv, hammasi yashil**. Kam chiqsa yoki yiqilsa — siz
+   Etalon: **510 ta tekshiruv, hammasi yashil**. Kam chiqsa yoki yiqilsa — siz
    regressiya qildingiz, tuzating.
 7. **Fayllarni o'chirmang / ko'chirmang / nomini o'zgartirmang.** Yangi fayl
    qo'shsangiz — sababini hisobotda yozing.

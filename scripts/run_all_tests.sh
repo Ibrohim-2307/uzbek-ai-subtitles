@@ -53,7 +53,7 @@ echo "[10/12] Kadrma-kadr So'z Vaqti Testlari (tests/test_word_timing.js) - 35 t
 node tests/test_word_timing.js
 
 echo ""
-echo "[11/12] Audio Aligner va Global Offset Python Testlari (tests/test_audio_align.py) - 23 ta tekshiruv..."
+echo "[11/12] Audio Aligner va Global Offset Python Testlari (tests/test_audio_align.py) - 31 ta tekshiruv..."
 $PYTHON_CMD tests/test_audio_align.py
 
 echo ""
@@ -63,5 +63,5 @@ $PYTHON_CMD tests/test_timing_aligner.py
 echo ""
 echo "======================================================================"
 echo "   🎉 BARCHA 12 TA TEST TO'PLAMI MUVAFFAQIYATLI O'TDI!"
-echo "   JAMI: 502 TA TEKSHIRUV - 100% YASHIL!"
+echo "   JAMI: 510 TA TEKSHIRUV - 100% YASHIL!"
 echo "======================================================================"

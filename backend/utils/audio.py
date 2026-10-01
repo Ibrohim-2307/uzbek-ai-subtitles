@@ -12,9 +12,21 @@ from typing import Tuple, List, Optional
 from pathlib import Path
 
 
+def get_ffmpeg_binary() -> Optional[str]:
+    """Tizimdagi yoki imageio_ffmpeg dagi ffmpeg yo'lini qaytaradi"""
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
 def check_ffmpeg() -> bool:
     """Tizimda FFmpeg mavjudligini tekshiradi"""
-    return shutil.which("ffmpeg") is not None
+    return get_ffmpeg_binary() is not None
 
 
 def convert_to_16k_mono_wav(
@@ -30,7 +42,8 @@ def convert_to_16k_mono_wav(
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Kiritilgan fayl topilmadi: {input_path}")
 
-    if not check_ffmpeg():
+    ffmpeg_bin = get_ffmpeg_binary()
+    if not ffmpeg_bin:
         if input_path.lower().endswith(".wav") and start_sec is None and duration_sec is None:
             return input_path
         raise RuntimeError(
@@ -41,7 +54,7 @@ def convert_to_16k_mono_wav(
         base, _ = os.path.splitext(input_path)
         output_path = f"{base}_16k_mono.wav"
 
-    cmd = ["ffmpeg", "-y", "-i", input_path]
+    cmd = [ffmpeg_bin, "-y", "-i", input_path]
     if start_sec is not None and start_sec > 0:
         cmd.extend(["-ss", str(start_sec)])
     if duration_sec is not None and duration_sec > 0:
@@ -74,14 +87,15 @@ def convert_to_optimized_mp3(
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Kiritilgan fayl topilmadi: {input_path}")
 
-    if not check_ffmpeg():
+    ffmpeg_bin = get_ffmpeg_binary()
+    if not ffmpeg_bin:
         return input_path
 
     if not output_path:
         base, _ = os.path.splitext(input_path)
         output_path = f"{base}_opt.mp3"
 
-    cmd = ["ffmpeg", "-y", "-i", input_path]
+    cmd = [ffmpeg_bin, "-y", "-i", input_path]
     if start_sec is not None and start_sec > 0:
         cmd.extend(["-ss", str(start_sec)])
     if duration_sec is not None and duration_sec > 0:
@@ -103,21 +117,44 @@ def convert_to_optimized_mp3(
 
 def get_audio_duration(file_path: str) -> float:
     """Audio fayl davomiyligini (soniyalarda) qaytaradi"""
+    # 1. Agar WAV bo'lsa, sof Python wave orqali aniq olish (ffprobe shart emas)
+    if file_path.lower().endswith(".wav") and os.path.exists(file_path):
+        try:
+            import wave
+            with wave.open(file_path, "rb") as wf:
+                return float(wf.getnframes()) / float(wf.getframerate())
+        except Exception:
+            pass
+
     if not check_ffmpeg():
         return 0.0
 
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        file_path
-    ]
+    if shutil.which("ffprobe"):
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            file_path
+        ]
+        try:
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
+            return float(out)
+        except Exception:
+            pass
 
-    try:
-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
-        return float(out)
-    except Exception:
-        return 0.0
+    ffmpeg_bin = get_ffmpeg_binary()
+    if ffmpeg_bin and os.path.exists(file_path):
+        try:
+            res = subprocess.run([ffmpeg_bin, "-i", file_path], stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            import re
+            m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", res.stderr)
+            if m:
+                h, m_min, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
+                return h * 3600.0 + m_min * 60.0 + s
+        except Exception:
+            pass
+
+    return 0.0
 
 
 def split_audio_into_chunks(audio_path: str, chunk_duration_sec: int = 300, output_dir: Optional[str] = None) -> List[Tuple[str, float]]:
@@ -137,10 +174,11 @@ def split_audio_into_chunks(audio_path: str, chunk_duration_sec: int = 300, outp
     current_start = 0.0
     chunk_index = 0
 
+    ffmpeg_bin = get_ffmpeg_binary() or "ffmpeg"
     while current_start < total_duration:
         chunk_file = os.path.join(output_dir, f"chunk_{chunk_index:04d}.mp3")
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_bin, "-y",
             "-ss", str(current_start),
             "-i", audio_path,
             "-t", str(chunk_duration_sec),
