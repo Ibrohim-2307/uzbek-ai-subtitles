@@ -153,6 +153,147 @@ def detect_pauses_and_onsets(
     }
 
 
+def estimate_global_offset(
+    words: List[Any],
+    onsets: List[float],
+    pauses: List[Tuple[float, float]],
+    max_offset: float = 1.2,
+    tolerance: float = 0.08,
+    min_support: int = 3
+) -> Tuple[float, int, bool]:
+    """
+    Butun audio uchun bitta umumiy ASR siljishini (lag) topadi (RANSAC uslubida support).
+    Yolg'on xulosadan himoya (4 ta mustaqil mezon):
+    1. Qo'llab-quvvatlash (Support): kamida min_support (3 ta) so'z o'z onsetiga ±tolerance (80 ms) ichida tushishi kerak.
+    2. Monotonlik (Monotonicity): so'zlar tartibi bilan mos kelgan onsetlar tartibi qat'iy o'suvchi (k1 < k2 < k3...).
+    3. Fizik mezon (Nutq oraliqlari): siljishdan keyin so'zlar sukut (pauza) ichida boshlamasligi shart; natija hozirgi holatdan yomon bo'lmasligi kerak.
+    4. Siljish chegarasi: |siljish| <= max_offset (1.2 s).
+
+    Qaytaradi: (offset_sec, support_count, is_valid)
+    """
+    if not words or not onsets or len(words) < min_support:
+        return 0.0, 0, False
+
+    word_starts = []
+    for w in words:
+        s = getattr(w, "start", None)
+        if s is None and isinstance(w, dict):
+            s = w.get("start", 0.0)
+        word_starts.append(float(s if s is not None else 0.0))
+
+    # Barcha potensial siljish nomzodlari: onset_j - word_start_i
+    candidate_deltas = set()
+    for s in word_starts:
+        for o in onsets:
+            d = round(o - s, 3)
+            if abs(d) <= max_offset:
+                candidate_deltas.add(d)
+
+    if not candidate_deltas:
+        return 0.0, 0, False
+
+    def count_pause_violations(starts: List[float], offset: float) -> int:
+        violations = 0
+        for s in starts:
+            shifted = s + offset
+            for p_start, p_end in pauses:
+                # Agar siljigan start sukut ichiga tushsa (margin 40 ms)
+                if (p_start + 0.04) < shifted < (p_end - 0.04):
+                    violations += 1
+                    break
+        return violations
+
+    baseline_violations = count_pause_violations(word_starts, 0.0)
+
+    best_delta = 0.0
+    best_support = 0
+    best_residual_mae = float("inf")
+
+    effective_min_support = max(min_support, int(math.ceil(len(word_starts) * 0.7)))
+
+    for delta in sorted(candidate_deltas):
+        # 1. Support & Matching
+        matches = []  # list of (word_idx, onset_idx, residual)
+        last_matched_onset_idx = -1
+        is_monotonic = True
+
+        for w_idx, s in enumerate(word_starts):
+            s_shifted = s + delta
+            # ±tolerance ichidagi onsetlarni topish
+            candidates = [(k, o) for k, o in enumerate(onsets) if abs(o - s_shifted) <= tolerance]
+            if candidates:
+                closest_k, closest_o = min(candidates, key=lambda item: abs(item[1] - s_shifted))
+                # 2. Monotonlik tekshiruvi: tartib buzilmasligi kerak
+                if closest_k <= last_matched_onset_idx:
+                    is_monotonic = False
+                    break
+                last_matched_onset_idx = closest_k
+                matches.append((w_idx, closest_k, closest_o - s))
+
+        if not is_monotonic or len(matches) < effective_min_support:
+            continue
+
+        # 3. Fizik mezon: siljishdan keyin so'zlar sukut ichida boshlamasligi shart
+        violations = count_pause_violations(word_starts, delta)
+        if violations > 0 or violations > baseline_violations:
+            continue
+
+        # Tizimli lag barqarorligi (residuals std dev < 0.025s)
+        residuals = [m[2] - delta for m in matches]
+        if len(residuals) >= 3 and (max(residuals) - min(residuals) > 0.05 or np.std(residuals) > 0.025):
+            continue
+
+        mae = float(np.mean(np.abs(residuals)))
+
+        # Eng ko'p support va minimal MAE tanlash
+        if len(matches) > best_support or (len(matches) == best_support and mae < best_residual_mae):
+            best_support = len(matches)
+            best_residual_mae = mae
+            best_delta = round(float(np.mean([m[2] for m in matches])), 3)
+
+    # 4. Chegaralar va yakuniy tekshiruv
+    if best_support >= effective_min_support and abs(best_delta) <= max_offset:
+        if abs(best_delta) < 0.025:
+            return 0.0, best_support, False
+        return best_delta, best_support, True
+
+    return 0.0, 0, False
+
+
+def apply_global_offset(words: List[Any], offset_sec: float) -> List[Any]:
+    """
+    Barcha so'zlarning start va end vaqtlariga global siljishni qo'llaydi.
+    """
+    if not words or abs(offset_sec) < 1e-4:
+        return words
+
+    res = []
+    for w in words:
+        if isinstance(w, dict):
+            new_w = dict(w)
+            orig_s = float(w.get("start", 0.0))
+            orig_e = float(w.get("end", orig_s + 0.1))
+            dur = max(0.04, orig_e - orig_s)
+            new_s = max(0.0, round(orig_s + offset_sec, 3))
+            new_e = max(new_s + dur, round(orig_e + offset_sec, 3))
+            new_w["start"] = new_s
+            new_w["end"] = new_e
+            res.append(new_w)
+        else:
+            orig_s = float(getattr(w, "start", 0.0))
+            orig_e = float(getattr(w, "end", orig_s + 0.1))
+            dur = max(0.04, orig_e - orig_s)
+            new_s = max(0.0, round(orig_s + offset_sec, 3))
+            new_e = max(new_s + dur, round(orig_e + offset_sec, 3))
+            try:
+                w.start = new_s
+                w.end = new_e
+                res.append(w)
+            except Exception:
+                res.append({"word": getattr(w, "word", str(w)), "start": new_s, "end": new_e})
+    return res
+
+
 def snap_word_timestamps_to_audio(
     words: List[Any],
     wav_path: Optional[str] = None,
@@ -166,7 +307,15 @@ def snap_word_timestamps_to_audio(
     Qaytaradi: (aniqlangan_sozlar, statistika)
     """
     if not words:
-        return [], {"snapped_count": 0, "avg_shift_ms": 0.0, "max_shift_ms": 0.0, "pauses_found": 0}
+        return [], {"snapped_count": 0, "avg_shift_ms": 0.0, "max_shift_ms": 0.0, "pauses_found": 0, "global_offset_sec": 0.0, "global_offset_ms": 0.0, "global_offset_applied": False, "support_count": 0}
+
+    # Boshlang'ich start vaqtlarini saqlab olamiz (haqiqiy siljish statistikasini hisoblash uchun)
+    initial_starts = []
+    for w in words:
+        s = getattr(w, "start", None)
+        if s is None and isinstance(w, dict):
+            s = w.get("start", 0.0)
+        initial_starts.append(float(s if s is not None else 0.0))
 
     # Agar WAV fayli mavjud bo'lmasa, faqat qoidalarni qo'llab qaytaramiz
     has_audio = wav_path and os.path.exists(wav_path)
@@ -183,6 +332,21 @@ def snap_word_timestamps_to_audio(
             pauses = analysis["pauses"]
         except Exception as e:
             print(f"[Audio Aligner] Ovoz energiyasini tahlil qilishda xatolik: {e}")
+
+    global_offset_sec = 0.0
+    global_offset_applied = False
+    support_count = 0
+
+    # 0-QADAM: Global siljishni (ASR lag) aniqlash va barcha so'zlarga qo'llash
+    if has_audio and onsets and len(words) >= 3:
+        offset_val, sup_cnt, is_valid = estimate_global_offset(
+            words, onsets, pauses, max_offset=1.2, tolerance=0.08, min_support=3
+        )
+        if is_valid and abs(offset_val) >= 0.025:
+            words = apply_global_offset(words, offset_val)
+            global_offset_sec = offset_val
+            global_offset_applied = True
+            support_count = sup_cnt
 
     window_sec = search_window_ms / 1000.0
     min_dur_sec = min_word_dur_ms / 1000.0
@@ -228,7 +392,7 @@ def snap_word_timestamps_to_audio(
         if cur_end - cur_start < min_dur_sec:
             cur_end = cur_start + min_dur_sec
 
-        shift_ms = abs(cur_start - orig_start) * 1000.0
+        shift_ms = abs(cur_start - initial_starts[idx]) * 1000.0
         shifts.append(shift_ms)
 
         refined_words.append({
@@ -275,7 +439,11 @@ def snap_word_timestamps_to_audio(
         "snapped_count": snapped_count,
         "avg_shift_ms": round(avg_shift, 1),
         "max_shift_ms": round(max_shift, 1),
-        "pauses_found": pauses_count
+        "pauses_found": pauses_count,
+        "global_offset_sec": round(global_offset_sec, 3),
+        "global_offset_ms": round(global_offset_sec * 1000.0, 1),
+        "global_offset_applied": global_offset_applied,
+        "support_count": support_count
     }
 
     return refined_words, stats

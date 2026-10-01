@@ -472,6 +472,19 @@ function initTranscribeSection() {
                     };
 
                     const result = await window.SubtitleAPI.transcribe(options);
+                    if (!audioEnergySnap && typeof alert === "function") {
+                        alert("⚠️ 'Ovoz energiyasi bilan aniqlashtirish (Snap)' O'CHIRILGAN.\n" +
+                              "Bu holda so'z vaqtlari audio bilan tekshirilmaydi va ASR kechikishi (masalan +400 ms) tuzatilmaydi — so'zlar kech yoki erta chiqadi.\n" +
+                              "Iltimos, uni YOQIB, transkripsiyani qaytadan boshlang.");
+                    }
+                    if (result && result.diagnostics && result.diagnostics.global_offset_applied) {
+                        const gOffMs = result.diagnostics.global_offset_ms || 0;
+                        const supCnt = result.diagnostics.support_count || 0;
+                        const sign = gOffMs >= 0 ? "+" : "";
+                        const lagMsg = `🎯 ASR kechikishi aniqlandi va tuzatildi: ${sign}${Math.round(gOffMs)} ms (${supCnt} ta so'z audio bilan moslandi)`;
+                        console.log(lagMsg);
+                        if (progressStatus) progressStatus.textContent = lagMsg;
+                    }
                     if (result.status === "success" && result.segments) {
                         const offsetAlreadyApplied = result.offset_applied === true;
                         const addOffset = offsetAlreadyApplied ? 0.0 : clipTimelineStart;

@@ -586,7 +586,11 @@ async def transcribe_audio(
             "snapped_words_count": align_stats.get("snapped_count", 0),
             "avg_shift_ms": align_stats.get("avg_shift_ms", 0.0),
             "max_shift_ms": align_stats.get("max_shift_ms", 0.0),
-            "pauses_found": align_stats.get("pauses_found", 0)
+            "pauses_found": align_stats.get("pauses_found", 0),
+            "global_offset_sec": align_stats.get("global_offset_sec", 0.0),
+            "global_offset_ms": align_stats.get("global_offset_ms", 0.0),
+            "global_offset_applied": align_stats.get("global_offset_applied", False),
+            "support_count": align_stats.get("support_count", 0)
         }
         print(f"[Transcribe Diagnostics] Jami {total_words_count} ta so'z aniqlandi ({first_w_time}s -> {last_w_time}s, Metod: {alignment_method_used}, Offset: {tl_offset_sec}s, Speed: {speed_factor}x, Clamped End: {max_clip_end}s)")
 
