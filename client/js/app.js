@@ -678,14 +678,27 @@ function initEditorSection() {
                 return;
             }
 
+            if (window.HostBridge && window.HostBridge.isHostBusy && window.HostBridge.isHostBusy()) {
+                alert("⚠️ Dastur (AE / Premiere Pro) oldingi amal ustida ishlamoqda.\nIltimos, tugmani QAYTA BOSMANG va kuting!");
+                return;
+            }
+
             const offsetEl = document.getElementById("timelineOffsetInput");
             const timelineOffset = offsetEl ? (parseFloat(offsetEl.value) || 0.0) : 0.0;
 
             const leadInEl = document.getElementById("animationLeadInInput");
             const leadIn = leadInEl ? (parseFloat(leadInEl.value) || 0.0) : 0.0;
 
+            const startTime = Date.now();
             btnInsertTimeline.disabled = true;
-            btnInsertTimeline.textContent = "🎬 Joylanmoqda (iltimos kuting)...";
+            const updateTimer = () => {
+                const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+                const m = Math.floor(elapsedSec / 60);
+                const s = String(elapsedSec % 60).padStart(2, '0');
+                btnInsertTimeline.textContent = `🎬 Joylanmoqda… ⏱ ${m}:${s} (AE/PPro ishlamoqda — bu oynani yopmang)`;
+            };
+            updateTimer();
+            const timerInterval = setInterval(updateTimer, 1000);
 
             let dlFilePath = "";
             try {
@@ -701,6 +714,7 @@ function initEditorSection() {
                 const charReveal = document.getElementById("checkCharReveal")?.checked || false;
                 const wordStackLines = parseInt(document.getElementById("inputWordStackLines")?.value, 10) || 2;
                 const wordPauseHold = document.getElementById("checkWordPauseHold") ? document.getElementById("checkWordPauseHold").checked : true;
+                const wordStackMaxLayers = parseInt(document.getElementById("inputWordStackMaxLayers")?.value, 10) || 1200;
 
                 const activePreset = { 
                     ...window.PresetManager.getActivePreset(), 
@@ -717,6 +731,7 @@ function initEditorSection() {
                     wordMaxLines: wordStackLines,
                     wordPauseHold: wordPauseHold,
                     wordPauseThresholdSec: pauseHideThresholdMs / 1000.0,
+                    wordStackMaxLayers: wordStackMaxLayers,
                     charReveal: charReveal
                 };
 
@@ -734,6 +749,16 @@ function initEditorSection() {
                 } catch (ePre) {}
 
                 const res = await window.HostBridge.insertSubtitles(window.SubtitleEditor.segments, activePreset, timelineOffset);
+
+                if (res && res.needTimeline) {
+                    alert("⚠️ " + (res.message || "Timeline topilmadi!") + "\n\n💡 Iltimos, Premiere Pro yoki After Effects dasturida Timeline panelini ochib, kerakli sequence yoki kompozitsiyani bosing va qaytadan 'Joylash' tugmasini bosing.");
+                    return;
+                }
+
+                if (res && res.timeout) {
+                    alert("⚠️ " + (res.error || "AE yoki Premiere orqa fonda ishlashda davom etmoqda. Iltimos, tugmani QAYTA BOSMANG!"));
+                    return;
+                }
 
                 if (res && res.success && (res.placed || res.count > 0 || res.inserted > 0 || res.layersCreated > 0)) {
                     alert(res.message || "✅ Subtitrlar videoning tepasidagi trekka muvaffaqiyatli joylandi!");
@@ -757,6 +782,7 @@ function initEditorSection() {
                 }
                 alert("💡 'Downloads/subtitrlar.srt' fayli tayyor! Uni Timeline'ga tortib qo'yishingiz mumkin.");
             } finally {
+                clearInterval(timerInterval);
                 btnInsertTimeline.disabled = false;
                 btnInsertTimeline.textContent = "🎬 Video Ustidagi Trekka Joylash (V2 / AE)";
             }
@@ -1383,6 +1409,14 @@ function renderDiagnosticsReport(report) {
 
     let logText = `=== O'ZBEKCHA AI SUBTITR DIAGNOSTIKA HISOBOTI ===\n`;
     logText += `Vaqt: ${report.timestamp}\n`;
+    const hVer = report.hostVersionCheck;
+    if (hVer) {
+        if (hVer.ok) {
+            logText += `Host fayli (shared.jsx): ${hVer.hostVersion} ✅\n`;
+        } else {
+            logText += `Host fayli (shared.jsx): ⚠️ ESKI! Panel bilan bir xil versiya qilib qo'ying (Kutilgan: ${hVer.expectedVersion}, Topilgan: ${hVer.hostVersion})\n`;
+        }
+    }
     logText += `Host Dastur: ${ext.appName || host} (Versiya: ${ext.appVersion || "Noma'lum"})\n`;
     logText += `ExtendScript Ulanishi: ${isExtOk ? "FAOL (OK)" : "XATO: " + (ext.error || "Ulanmadi")}\n`;
     logText += `Faol Timeline: ${hasTimeline ? (ext.timeline.name + " (" + (ext.timeline.fps ? ext.timeline.fps.toFixed(2) : 25) + " fps)") : "Yo'q"}\n`;
@@ -1397,6 +1431,9 @@ function renderDiagnosticsReport(report) {
     lastDiagReportText = logText;
 
     let html = "";
+    if (hVer) {
+        html += `<div>${hVer.ok ? "✅" : "⚠️"} <strong>Host fayli (shared.jsx):</strong> ${hVer.hostVersion} ${hVer.ok ? "✅" : "⚠️ ESKI! Panel bilan bir xil versiya qilib qo'ying"}</div>`;
+    }
     html += `<div>${isExtOk ? "✅" : "❌"} <strong>Host:</strong> ${ext.appName || host} ${ext.appVersion ? "v" + ext.appVersion : ""}</div>`;
     html += `<div>${isExtOk ? "✅" : "❌"} <strong>ExtendScript:</strong> ${isExtOk ? "Ulandi" : "Xatolik (" + (ext.error || "Aloqa yo'q") + ")"}</div>`;
     html += `<div>${hasTimeline ? "✅" : "⚠️"} <strong>Faol ${ext.timeline ? ext.timeline.type : "Timeline"}:</strong> ${hasTimeline ? ext.timeline.name : "Ochilmagan"}</div>`;

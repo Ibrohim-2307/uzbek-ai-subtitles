@@ -150,9 +150,9 @@ assert.strictEqual(layer1.property("Source Text").keyframes.length, 0, "Source T
 
 const scaleKeys1 = layer1.property("Scale").keyframes;
 assert(scaleKeys1.length >= 3, "Pop animatsiyasi uchun kamida 3 ta Scale kaliti kerak");
-assert.deepStrictEqual(scaleKeys1[0].value, [88, 88]);
-assert.deepStrictEqual(scaleKeys1[1].value, [112, 112]);
-assert.deepStrictEqual(scaleKeys1[2].value, [100, 100]);
+assert.deepStrictEqual(scaleKeys1[0].value, [88, 88, 100]);
+assert.deepStrictEqual(scaleKeys1[1].value, [112, 112, 100]);
+assert.deepStrictEqual(scaleKeys1[2].value, [100, 100, 100]);
 assert(layer1.property("Opacity").keyframes.length >= 1, "Yopilish opacity kaliti bo'lishi kerak");
 
 // ============================================================================
@@ -220,7 +220,7 @@ assert.strictEqual(compOffset._allLayers.length, 1);
 const lOff = compOffset._allLayers[0];
 // Kutilgan inPoint = 1.0 + 5.0 (displayStart) + 3.0 (clipOffset) = 9.0s
 assert.strictEqual(lOff.inPoint, 9.0, `Offsetli inPoint 9.0 bo'lishi kerak, lekin: ${lOff.inPoint}`);
-assert.strictEqual(lOff.startTime, 9.0);
+assert.strictEqual(lOff.startTime, 0.0, "startTime o'zgartirilmasligi (0.0 qolishi) kerak - Sabab 9");
 assert(lOff.outPoint > 9.0);
 assert.strictEqual(lOff.name, "[UZ_WORD] offsetli");
 assert.strictEqual(lOff.comment, "UZ_AI_SUBTITLE");

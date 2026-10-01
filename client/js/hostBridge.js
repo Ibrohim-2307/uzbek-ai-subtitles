@@ -1,19 +1,84 @@
 function logDebug(msg) {
     try {
+        let text = String(msg);
+        if (text.length > 400) {
+            text = text.substring(0, 400) + "... [qisqartirildi]";
+        }
         if (typeof require !== "undefined") {
             const fs = require('fs');
-            fs.appendFileSync('d:/anti garavity loyhalar/plogin/extension_debug.log', `[JS ${new Date().toISOString()}] ${msg}\n`, 'utf8');
+            const os = require('os');
+            const path = require('path');
+            const logDir = (process.env && process.env.USERPROFILE) ? process.env.USERPROFILE : os.tmpdir();
+            fs.appendFileSync(path.join(logDir, 'uzbek-subtitr-debug.log'), `[JS ${new Date().toISOString()}] ${text}\n`, 'utf8');
         }
     } catch (e) {}
     console.log("[HostBridge]", msg);
 }
 
 const HostBridge = {
+    PANEL_VERSION: "2026.10.01-2",
+    MIN_HOST_VERSION: "2026.10.01-2",
     cs: null,
     hostApp: "UNKNOWN", // "AEFT" yoki "PPRO"
     _scriptLoaded: false,
     _loadingPromise: null,
     _evalQueue: Promise.resolve(),
+    hostBusyUntil: 0,
+
+    isHostBusy() {
+        return Date.now() < this.hostBusyUntil;
+    },
+
+    async checkHostVersion() {
+        try {
+            const res = await this.eval("host_getVersion()");
+            const hostVer = (typeof res === "string") ? res : (res && res.version ? res.version : (res && typeof res.success !== "undefined" ? "" : String(res)));
+            const cleanVer = String(hostVer || "").replace(/["']/g, "").trim();
+            return {
+                ok: cleanVer === this.MIN_HOST_VERSION,
+                hostVersion: cleanVer || "yo'q",
+                expectedVersion: this.MIN_HOST_VERSION
+            };
+        } catch (e) {
+            return { ok: false, hostVersion: "noma'lum", expectedVersion: this.MIN_HOST_VERSION, error: String(e) };
+        }
+    },
+
+    writePayloadFile(data) {
+        try {
+            if (typeof require !== "undefined") {
+                const fs = require('fs');
+                const os = require('os');
+                const path = require('path');
+                const tmpFile = path.join(os.tmpdir(), `uzbek_sub_${Date.now()}_${Math.floor(Math.random() * 10000)}.json`);
+                fs.writeFileSync(tmpFile, JSON.stringify(data), 'utf8');
+                return tmpFile;
+            }
+        } catch (e) {
+            logDebug("writePayloadFile xatolik: " + e.message);
+        }
+        return null;
+    },
+
+    async callHostWithPayload(funcName, data) {
+        const filePath = this.writePayloadFile(data);
+        if (filePath) {
+            const cleanPath = filePath.replace(/\\/g, "/");
+            if (funcName === "ae_createSubtitles") {
+                logDebug("Payload fayli orqali chaqirilmoqda: " + cleanPath);
+                const res = await this.eval(`ae_createSubtitlesFromFile("${cleanPath}")`);
+                try {
+                    if (typeof require !== "undefined") {
+                        const fs = require('fs');
+                        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+                    }
+                } catch (delErr) {}
+                return res;
+            }
+        }
+        const encoded = encodeURIComponent(JSON.stringify(data));
+        return await this.eval(`${funcName}("${encoded}")`);
+    },
 
     init() {
         this.cs = new CSInterface();
@@ -125,15 +190,20 @@ const HostBridge = {
                         "return '{\"ok\":false,\"success\":false,\"error\":\"' + _cleanMsg + '\",\"line\":' + (_e.line || 0) + '}'; " +
                         "} })();";
 
-                    let isHeavy = /insertMogrt|autoCut/i.test(script);
-                    let timeoutMs = isHeavy ? 300000 : 25000;
+                    let isHeavy = /insertMogrt|autoCut|createSubtitles|SubtitlesFromFile|writeWordStack|insertSubtitles/i.test(script);
+                    let timeoutMs = isHeavy ? 900000 : 25000;
                     let finished = false;
                     const timer = setTimeout(() => {
                         if (!finished) {
                             finished = true;
+                            HostBridge.hostBusyUntil = Date.now() + 300000;
                             logDebug("ExtendScript timeout (" + timeoutMs + "ms): " + script.slice(0, 60));
                             innerDone();
-                            resolve({ success: false, timeout: true, error: "ExtendScript javob bermadi (timeout)" });
+                            resolve({
+                                success: false,
+                                timeout: true,
+                                error: "ExtendScript javob bermadi (timeout). AE yoki Premiere orqa fonda ishlashda davom etmoqda. Iltimos, tugmani QAYTA BOSMANG!"
+                            });
                         }
                     }, timeoutMs);
 
@@ -420,18 +490,28 @@ const HostBridge = {
                     pauseThresholdSec: (styleOptions.pauseHideThresholdMs || 800) / 1000.0,
                     charReveal: !!styleOptions.charReveal
                 });
+
+                // Sabab 4: Kaskad qatlam chegarasi (standart 1200)
+                const maxWordLayers = (styleOptions && styleOptions.wordStackMaxLayers) ? parseInt(styleOptions.wordStackMaxLayers, 10) : 1200;
+                if (wordPlan && wordPlan.words && wordPlan.words.length > maxWordLayers) {
+                    const totalW = wordPlan.words.length;
+                    logDebug(`Kaskad qatlamlar chegarasidan oshdi (${totalW} > ${maxWordLayers}). AE qotib qolmasligi uchun oddiy subtitr rejimiga o'tkazildi.`);
+                    wordPlan = null;
+                    if (typeof alert === "function") {
+                        alert(`ℹ️ So'zlar soni (${totalW} ta) kaskad chegarasidan (${maxWordLayers} ta) ko'p bo'lganligi sababli, After Effects qotib qolmasligi uchun oddiy subtitr rejimida joylanmoqda.`);
+                    }
+                }
             }
 
-            const payload = JSON.stringify({
+            const payloadObj = {
                 segments: timelineSegments,
                 wordPlan: wordPlan,
                 style: styleOptions,
                 timelineOffset: 0.0,
                 leadIn: leadIn,
                 fps: (window.UzbekUtils && window.UzbekUtils.getHostFps) ? window.UzbekUtils.getHostFps() : 25.0
-            });
-            const encoded = encodeURIComponent(payload);
-            return await this.eval(`ae_createSubtitles("${encoded}")`);
+            };
+            return await this.callHostWithPayload("ae_createSubtitles", payloadObj);
         } else if (this.hostApp === "PPRO") {
             // Premiere Pro: Agar MOGRT tanlangan bo'lsa yoki mavjud bo'lsa, to'g'ridan-to'g'ri Video Trekka (V2) joylaymiz
             let chosenMogrt = (styleOptions && styleOptions.mogrtPath) ? styleOptions.mogrtPath : "";
@@ -551,7 +631,16 @@ const HostBridge = {
                 } catch(eCopy) {}
             }
 
-            const hasAnyMogrt = !!chosenMogrt || timelineSegments.some(s => !!s.mogrtPath);
+            let hasAnyMogrt = !!chosenMogrt || timelineSegments.some(s => !!s.mogrtPath);
+
+            // Sabab 4: Premiere'da 400+ klip bo'lsa MOGRT o'rniga Caption Track (SRT) ishlatiladi
+            if (hasAnyMogrt && timelineSegments.length > 400) {
+                logDebug(`MOGRT kliplari soni (${timelineSegments.length}) 400 tadan oshdi. Premiere Pro barqarorligi uchun MOGRT o'rniga Caption Track (SRT) ishlatiladi.`);
+                hasAnyMogrt = false;
+                if (typeof alert === "function") {
+                    alert(`ℹ️ Subtitrlar soni (${timelineSegments.length} ta) 400 tadan oshganligi sababli, Premiere Pro qotib qolmasligi uchun MOGRT o'rniga Caption Track (SRT) formatida joylanadi.`);
+                }
+            }
 
             if (hasAnyMogrt) {
                 const payload = JSON.stringify({
@@ -655,6 +744,13 @@ const HostBridge = {
                 hasCepFs: !!(window.cep && window.cep.fs)
             }
         };
+
+        // 0. Host fayli versiyasini tekshirish
+        try {
+            diagReport.hostVersionCheck = await this.checkHostVersion();
+        } catch (eVer) {
+            diagReport.hostVersionCheck = { ok: false, error: eVer.message || String(eVer) };
+        }
 
         // 1. ExtendScript tekshiruvi
         try {

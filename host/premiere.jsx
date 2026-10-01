@@ -4,15 +4,26 @@
  * funksiyalarini o'z ichiga olgan mustaqil modul.
  */
 
+var UZ_JSX_VERSION = "2026.10.01-2";
+
+function host_getVersion() {
+    return UZ_JSX_VERSION;
+}
+
 function jsxLog(msg) {
     try {
-        var f = new File("d:/anti garavity loyhalar/plogin/extension_debug.log");
+        var logText = String(msg);
+        if (logText.length > 400) {
+            logText = logText.substring(0, 400) + "... [qisqartirildi]";
+        }
+        var logDir = (Folder && Folder.temp) ? Folder.temp.fsName : "C:/temp";
+        var f = new File(logDir + "/uzbek-subtitr-debug.log");
         f.open("a");
-        f.writeln("[JSX " + new Date().toString() + "] " + msg);
+        f.writeln("[JSX " + new Date().toString() + "] " + logText);
         f.close();
     } catch (e) {}
 }
-jsxLog("host/shared.jsx yuklandi!");
+jsxLog("host/shared.jsx v" + UZ_JSX_VERSION + " yuklandi!");
 
 // ExtendScript muhiti uchun JSON polyfill (agar mavjud bo'lmasa)
 var JSON = (typeof JSON === "object" && JSON) ? JSON : {};
@@ -320,38 +331,18 @@ function host_runDiagnostics() {
 function ppro_getSeq() {
     if (!app.project) return null;
     if (app.project.activeSequence) return app.project.activeSequence;
+
+    // Aktiv sequence bo'lmasa: faqat loyihada aynan bitta sequence bo'lsa o'sha olinadi
+    // Hech qachon openSequence chaqirilmaydi!
     try {
         if (app.project.sequences) {
             var nSeq = app.project.sequences.numSequences || app.project.sequences.length || 0;
-            // 1. Kliplari bor bo'lgan haqiqiy montaj sequence'ni topish
-            for (var s = 0; s < nSeq; s++) {
-                var sq = app.project.sequences[s];
-                if (sq && sq.videoTracks && sq.videoTracks.numTracks > 0) {
-                    for (var t = 0; t < sq.videoTracks.numTracks; t++) {
-                        if (sq.videoTracks[t].clips && sq.videoTracks[t].clips.numItems > 0) {
-                            return sq;
-                        }
-                    }
-                }
+            if (nSeq === 1 && app.project.sequences[0]) {
+                return app.project.sequences[0];
             }
-            if (nSeq > 0 && app.project.sequences[0]) return app.project.sequences[0];
         }
     } catch (eSeq) {}
-    try {
-        if (app.project.rootItem && app.project.rootItem.children) {
-            for (var i = 0; i < app.project.rootItem.children.numItems; i++) {
-                var it = app.project.rootItem.children[i];
-                if (it && typeof it.isSequence === "function" && it.isSequence()) {
-                    try {
-                        if (typeof app.project.openSequence === "function") {
-                            app.project.openSequence(it.sequenceID);
-                        }
-                    } catch (osErr) {}
-                    if (app.project.activeSequence) return app.project.activeSequence;
-                }
-            }
-        }
-    } catch (rErr) {}
+
     return null;
 }
 
@@ -435,10 +426,23 @@ function ppro_getSequenceInfo() {
     try {
         var seq = ppro_getSeq();
         if (!seq) {
+            var totalSeq = 0;
+            try {
+                if (app.project && app.project.sequences) {
+                    totalSeq = app.project.sequences.numSequences || app.project.sequences.length || 0;
+                }
+            } catch (cntErr) {}
+
+            var notFoundMsg = "Aktiv ketma-ketlik (sequence) topilmadi! Iltimos, Premiere Pro'da Timeline panelini ochib videoni tanlang.";
+            if (totalSeq > 1) {
+                notFoundMsg = "Loyihada bir nechta (" + totalSeq + " ta) sequence mavjud. Iltimos, Timeline panelini ochib, kerakli sequence'ni bosing!";
+            }
+
             return JSON.stringify({
                 ok: false,
                 exists: false,
-                message: "Aktiv ketma-ketlik (sequence) topilmadi! Iltimos, Premiere Pro'da videoni oching."
+                needTimeline: true,
+                message: notFoundMsg
             });
         }
         var curSec = 0;
@@ -1017,8 +1021,21 @@ function ppro_cleanupOldSubtitles(seq, targetTrackIndex) {
                 if (!trk || !trk.clips) continue;
                 for (var c = trk.clips.numItems - 1; c >= 0; c--) {
                     var cl = trk.clips[c];
-                    var cName = (cl && cl.name) ? cl.name.toLowerCase() : "";
-                    if (cName.indexOf("subtitr") !== -1 || cName.indexOf("mogrt") !== -1 || cName.indexOf("caption") !== -1 || cName.indexOf("uz_") !== -1 || cName.indexOf("temp_uz_") !== -1 || cName.indexOf("[") === 0) {
+                    if (!cl) continue;
+                    var cName = cl.name ? String(cl.name) : "";
+                    var mPath = "";
+                    try {
+                        if (cl.projectItem && typeof cl.projectItem.getMediaPath === "function") {
+                            mPath = String(cl.projectItem.getMediaPath()).toLowerCase();
+                        }
+                    } catch (mpErr) {}
+
+                    var isOurClip = (cName.indexOf("[UZ-") === 0) ||
+                                    (cName.indexOf("[UZ_WORD]") === 0) ||
+                                    (mPath.indexOf("subtitrlar.srt") !== -1) ||
+                                    (mPath.indexOf("temp_uz_subtitles.srt") !== -1);
+
+                    if (isOurClip) {
                         try {
                             if (typeof cl.remove === "function") {
                                 cl.remove(false, false);
@@ -1030,7 +1047,7 @@ function ppro_cleanupOldSubtitles(seq, targetTrackIndex) {
         }
     } catch (vErr) {}
 
-    // 2. Caption treklardagi eski subtitrlarni ham tozalash (C1, C2 larni to'ldirib tashlamaslik uchun)
+    // 2. Caption treklardagi eski subtitrlarni ham tozalash (faqat bizning SRT fayldan kelganlar)
     try {
         if (seq.captionTracks && seq.captionTracks.numTracks > 0) {
             for (var ct = 0; ct < seq.captionTracks.numTracks; ct++) {
@@ -1038,11 +1055,26 @@ function ppro_cleanupOldSubtitles(seq, targetTrackIndex) {
                 if (!capT || !capT.clips) continue;
                 for (var cc = capT.clips.numItems - 1; cc >= 0; cc--) {
                     var ccl = capT.clips[cc];
+                    if (!ccl) continue;
+                    var cclName = ccl.name ? String(ccl.name) : "";
+                    var capMPath = "";
                     try {
-                        if (typeof ccl.remove === "function") {
-                            ccl.remove(false, false);
+                        if (ccl.projectItem && typeof ccl.projectItem.getMediaPath === "function") {
+                            capMPath = String(ccl.projectItem.getMediaPath()).toLowerCase();
                         }
-                    } catch (ce) {}
+                    } catch (cmpErr) {}
+
+                    var isOurCap = (cclName.indexOf("[UZ-") === 0) ||
+                                   (capMPath.indexOf("subtitrlar.srt") !== -1) ||
+                                   (capMPath.indexOf("temp_uz_subtitles.srt") !== -1);
+
+                    if (isOurCap) {
+                        try {
+                            if (typeof ccl.remove === "function") {
+                                ccl.remove(false, false);
+                            }
+                        } catch (ce) {}
+                    }
                 }
             }
         }
@@ -1082,6 +1114,9 @@ function ppro_insertSubtitlesViaSRT(srtFilePath, timelineOffset) {
         }
 
         var seq = ppro_getSeq();
+        if (!seq) {
+            return JSON.stringify({ ok: false, success: false, needTimeline: true, message: "Aktiv sequence topilmadi! Iltimos, Premiere Pro Timeline panelida ketma-ketlikni tanlang." });
+        }
         var placed = false;
 
         if (seq && importedItem) {
@@ -1166,7 +1201,7 @@ function ppro_insertMogrtSubtitles(payloadJson) {
     try {
         var seq = ppro_getSeq();
         if (!seq) {
-            return JSON.stringify({ ok: false, success: false, message: "Aktiv sequence topilmadi" });
+            return JSON.stringify({ ok: false, success: false, needTimeline: true, message: "Aktiv sequence topilmadi! Iltimos, Premiere Pro Timeline panelida ketma-ketlikni tanlang." });
         }
 
         var dataStr = payloadJson;
@@ -1288,7 +1323,8 @@ function ppro_insertMogrtSubtitles(payloadJson) {
                     if (!animTag) animTag = "Subtitr " + (i + 1);
 
                     var shortText = segText.length > 25 ? (segText.substring(0, 22) + "...") : segText;
-                    newTrackItem.name = "[" + animTag + "] " + shortText;
+                    var cleanTag = String(animTag).replace(/[\[\]]/g, "").replace(/^\s+|\s+$/g, "");
+                    newTrackItem.name = "[UZ-" + cleanTag + "] " + shortText;
                     lastTrackItem = newTrackItem;
                     lastActualStart = actualStart;
 
@@ -1410,16 +1446,75 @@ function ppro_insertMogrtSubtitles(payloadJson) {
 
 // ==================== AFTER EFFECTS YORDAMCHI VA ASOSIY FUNKSIYALARI ====================
 
+function ae_resolveComp() {
+    if (!app.project) {
+        return { comp: null, error: "After Effects loyihasi ochilmagan" };
+    }
+    // 1. Agar aktiv element CompItem bo'lsa
+    if (app.project.activeItem && (app.project.activeItem instanceof CompItem)) {
+        return { comp: app.project.activeItem, error: null };
+    }
+
+    // 2. Aks holda aktiv element turini aniqlash va loyihadagi kompozitsiyalarni qidirish
+    var compItems = [];
+    var activeItemDesc = "yo'q";
+    if (app.project.activeItem) {
+        var aItem = app.project.activeItem;
+        var typeName = "Item";
+        if (typeof FolderItem !== "undefined" && aItem instanceof FolderItem) {
+            typeName = "FolderItem";
+        } else if (typeof FootageItem !== "undefined" && aItem instanceof FootageItem) {
+            typeName = "FootageItem";
+        }
+        activeItemDesc = "'" + (aItem.name || "Nomsiz") + "' (" + typeName + ")";
+    }
+
+    try {
+        var numItems = app.project.numItems || 0;
+        for (var i = 1; i <= numItems; i++) {
+            var item = app.project.item(i);
+            if (item && (item instanceof CompItem)) {
+                compItems.push(item);
+            }
+        }
+    } catch (eScan) {}
+
+    if (compItems.length === 1) {
+        return {
+            comp: compItems[0],
+            error: null,
+            note: "Yagona kompozitsiya tanlandi: " + compItems[0].name
+        };
+    }
+
+    if (compItems.length === 0) {
+        return {
+            comp: null,
+            error: "Loyihada hech qanday kompozitsiya topilmadi. Avval yangi kompozitsiya yarating (Aktiv tanlangan: " + activeItemDesc + ")"
+        };
+    }
+
+    var compNames = [];
+    for (var c = 0; c < compItems.length && c < 5; c++) {
+        compNames.push("'" + compItems[c].name + "'");
+    }
+    return {
+        comp: null,
+        error: "Aktiv kompozitsiya tanlanmagan (Hozirgi tanlov: " + activeItemDesc + "). Iltimos, Timeline panelida kerakli kompozitsiyani bosing. Mavjud kompozitsiyalar: " + compNames.join(", ") + (compItems.length > 5 ? "..." : "")
+    };
+}
+
 function ae_getCompInfo() {
     try {
-        if (!app.project || !app.project.activeItem || !(app.project.activeItem instanceof CompItem)) {
+        var res = ae_resolveComp();
+        if (!res.comp) {
             return JSON.stringify({
                 ok: false,
                 exists: false,
-                message: "Aktiv kompozitsiya topilmadi! Iltimos, After Effects'da kompozitsiyani oching."
+                message: res.error || "Aktiv kompozitsiya topilmadi! Iltimos, After Effects'da kompozitsiyani oching."
             });
         }
-        var comp = app.project.activeItem;
+        var comp = res.comp;
         return JSON.stringify({
             ok: true,
             exists: true,
@@ -1428,7 +1523,8 @@ function ae_getCompInfo() {
             height: comp.height,
             frameRate: comp.frameRate,
             duration: comp.duration,
-            time: comp.time
+            time: comp.time,
+            note: res.note || ""
         });
     } catch (e) {
         return JSON.stringify({ ok: false, exists: false, error: e.toString(), line: e.line || 0 });
@@ -1437,11 +1533,12 @@ function ae_getCompInfo() {
 
 function ae_setPlayhead(timeSec) {
     try {
-        if (app.project && app.project.activeItem && app.project.activeItem instanceof CompItem) {
-            app.project.activeItem.time = parseFloat(timeSec);
+        var res = ae_resolveComp();
+        if (res && res.comp) {
+            res.comp.time = parseFloat(timeSec);
             return JSON.stringify({ ok: true, status: "ok" });
         }
-        return JSON.stringify({ ok: false, status: "error", message: "Kompozitsiya topilmadi" });
+        return JSON.stringify({ ok: false, status: "error", message: res.error || "Kompozitsiya topilmadi" });
     } catch (e) {
         return JSON.stringify({ ok: false, status: "error", error: e.toString(), line: e.line || 0 });
     }
@@ -1662,6 +1759,13 @@ function ae_writeWordStackLayers(comp, wordPlan, style, data) {
     if (words.length === 0) {
         return JSON.stringify({ ok: true, success: true, count: 0, message: "So'zlar yo'q" });
     }
+    if (words.length > 3000) {
+        return JSON.stringify({
+            ok: false,
+            success: false,
+            error: "So'zlar soni 3000 tadan ko'p (" + words.length + " ta). Iltimos, oddiy subtitr rejimini tanlang yoki qisqaroq bo'lakni yuboring."
+        });
+    }
 
     var fps = comp.frameRate || 25.0;
     var compH = comp.height;
@@ -1721,153 +1825,164 @@ function ae_writeWordStackLayers(comp, wordPlan, style, data) {
     } catch (tmplErr) {}
 
     var createdCount = 0;
+    var errorCount = 0;
+    var lastErrorMsg = "";
 
     for (var i = 0; i < words.length; i++) {
-        var item = words[i];
-        if (!item || !item.word) continue;
-
-        // Kadr aniqligida kompozitsiya vaqti (hech qachon kechikmaslik uchun floor)
-        var wIn = Math.floor(item.inPoint * fps + 0.000001) / fps + totalOffset;
-        var wOut = Math.ceil(item.outPoint * fps - 0.000001) / fps + totalOffset;
-        var cClose = Math.floor(item.closeStart * fps + 0.000001) / fps + totalOffset;
-        var wEnd = Math.round(item.wordEnd * fps) / fps + totalOffset;
-
-        // Clamping kompozitsiya chegaralariga
-        if (wIn >= targetLayerOut) continue;
-        if (wOut > targetLayerOut) wOut = targetLayerOut;
-        if (wIn < targetLayerIn) wIn = targetLayerIn;
-        if (wOut <= wIn) continue;
-
-        var wordLayer = comp.layers.addText(item.word);
-        wordLayer.comment = "UZ_AI_SUBTITLE";
-        wordLayer.name = "[UZ_WORD] " + item.word;
-
-        wordLayer.startTime = wIn;
-        wordLayer.inPoint = wIn;
-        wordLayer.outPoint = wOut;
-
-        // Text Document qo'llash
+        var wordLayer = null;
         try {
-            var textProp = wordLayer.property("Source Text");
-            var textDoc = textProp.value;
-            textDoc.fontSize = fontSize;
-            try { textDoc.font = fontName; } catch (eF) { try { textDoc.font = "ArialMT"; } catch (eF2) {} }
-            textDoc.fillColor = fillRGB;
-            textDoc.applyFill = true;
-            if (strokeW > 0) {
-                textDoc.applyStroke = true;
-                textDoc.strokeColor = strokeRGB;
-                textDoc.strokeWidth = strokeW;
-                textDoc.strokeOverFill = false;
-            } else {
-                textDoc.applyStroke = false;
-            }
-            textDoc.justification = ParagraphJustification.CENTER_JUSTIFY;
-            textProp.setValue(textDoc);
-        } catch (tDocErr) {}
+            var item = words[i];
+            if (!item || !item.word) continue;
 
-        // Boshlang'ich pozitsiya
-        var curLine = item.initialLine || 0;
-        var curY = basePosY + (curLine * lineSpacing);
-        if (curY > maxY) curY = maxY;
+            // Kadr aniqligida kompozitsiya vaqti (hech qachon kechikmaslik uchun floor)
+            var wIn = Math.floor(item.inPoint * fps + 0.000001) / fps + totalOffset;
+            var wOut = Math.ceil(item.outPoint * fps - 0.000001) / fps + totalOffset;
+            var cClose = Math.floor(item.closeStart * fps + 0.000001) / fps + totalOffset;
+            var wEnd = Math.round(item.wordEnd * fps) / fps + totalOffset;
 
-        var posProp = wordLayer.property("Position");
-        if (posProp) {
-            posProp.setValue([posX, curY]);
+            // Clamping kompozitsiya chegaralariga
+            if (wIn >= targetLayerOut) continue;
+            if (wOut > targetLayerOut) wOut = targetLayerOut;
+            if (wIn < targetLayerIn) wIn = targetLayerIn;
+            if (wOut <= wIn) continue;
 
-            // Agar qator almashinuvi (lineChanges) bo'lsa -> Position kalitlari
-            if (item.lineChanges && item.lineChanges.length > 0) {
-                for (var cIdx = 0; cIdx < item.lineChanges.length; cIdx++) {
-                    var chg = item.lineChanges[cIdx];
-                    var chgTime = Math.floor(chg.time * fps + 0.000001) / fps + totalOffset;
-                    var fromY = basePosY + (chg.fromLine * lineSpacing);
-                    var toY = basePosY + (chg.toLine * lineSpacing);
-                    if (fromY > maxY) fromY = maxY;
-                    if (toY > maxY) toY = maxY;
+            wordLayer = comp.layers.addText(item.word);
+            wordLayer.comment = "UZ_AI_SUBTITLE";
+            wordLayer.name = "[UZ_WORD] " + item.word;
 
-                    if (chgTime > wIn && chgTime < wOut) {
-                        var animLead = Math.max(0.04, 2 / fps);
-                        posProp.setValueAtTime(chgTime - animLead, [posX, fromY]);
-                        posProp.setValueAtTime(chgTime, [posX, toY]);
+            // MUHIM (Sabab 9): startTime o'rnatilmaydi (0 da qoladi), faqat inPoint va outPoint!
+            wordLayer.inPoint = wIn;
+            wordLayer.outPoint = wOut;
+
+            // Text Document qo'llash
+            try {
+                var textProp = wordLayer.property("Source Text");
+                var textDoc = textProp.value;
+                textDoc.fontSize = fontSize;
+                try { textDoc.font = fontName; } catch (eF) { try { textDoc.font = "ArialMT"; } catch (eF2) {} }
+                textDoc.fillColor = fillRGB;
+                textDoc.applyFill = true;
+                if (strokeW > 0) {
+                    textDoc.applyStroke = true;
+                    textDoc.strokeColor = strokeRGB;
+                    textDoc.strokeWidth = strokeW;
+                    textDoc.strokeOverFill = false;
+                } else {
+                    textDoc.applyStroke = false;
+                }
+                textDoc.justification = ParagraphJustification.CENTER_JUSTIFY;
+                textProp.setValue(textDoc);
+            } catch (tDocErr) {}
+
+            // Boshlang'ich pozitsiya
+            var curLine = item.initialLine || 0;
+            var curY = basePosY + (curLine * lineSpacing);
+            if (curY > maxY) curY = maxY;
+
+            var posProp = wordLayer.property("Position");
+            if (posProp) {
+                posProp.setValue([posX, curY]);
+
+                // Agar qator almashinuvi (lineChanges) bo'lsa -> Position kalitlari
+                if (item.lineChanges && item.lineChanges.length > 0) {
+                    for (var cIdx = 0; cIdx < item.lineChanges.length; cIdx++) {
+                        var chg = item.lineChanges[cIdx];
+                        var chgTime = Math.floor(chg.time * fps + 0.000001) / fps + totalOffset;
+                        var fromY = basePosY + (chg.fromLine * lineSpacing);
+                        var toY = basePosY + (chg.toLine * lineSpacing);
+                        if (fromY > maxY) fromY = maxY;
+                        if (toY > maxY) toY = maxY;
+
+                        if (chgTime > wIn && chgTime < wOut) {
+                            var animLead = Math.max(0.04, 2 / fps);
+                            posProp.setValueAtTime(chgTime - animLead, [posX, fromY]);
+                            posProp.setValueAtTime(chgTime, [posX, toY]);
+                        }
                     }
                 }
             }
-        }
 
-        // Animatsiya: Pop, Fade yoki None
-        var scaleProp = wordLayer.property("Scale");
-        var opacityProp = wordLayer.property("Opacity");
+            // Animatsiya: Pop, Fade yoki None (3D Scale)
+            var scaleProp = wordLayer.property("Scale");
+            var opacityProp = wordLayer.property("Opacity");
 
-        if (animType === "pop" && scaleProp) {
-            var p1 = wIn;
-            var p2 = wIn + (2 / fps);
-            var p3 = wIn + (4 / fps);
-            if (p3 < wOut) {
-                scaleProp.setValueAtTime(p1, [88, 88]);
-                scaleProp.setValueAtTime(p2, [112, 112]);
-                scaleProp.setValueAtTime(p3, [100, 100]);
-            }
-        } else if (animType === "fade" && opacityProp) {
-            var fEnd = wIn + (3 / fps);
-            if (fEnd < wOut) {
-                opacityProp.setValueAtTime(wIn, 0);
-                opacityProp.setValueAtTime(fEnd, 100);
-            }
-        }
-
-        // Yopilish animatsiyasi (closeStart dan outPoint gacha)
-        if (cClose < wOut && cClose >= wIn) {
-            if (opacityProp) {
-                opacityProp.setValueAtTime(cClose, 100);
-                opacityProp.setValueAtTime(wOut, 0);
-            }
             if (animType === "pop" && scaleProp) {
-                scaleProp.setValueAtTime(cClose, [100, 100]);
-                scaleProp.setValueAtTime(wOut, [92, 92]);
-            }
-        }
-
-        // Harf-harf ochilish (charReveal)
-        if (item.charReveal && wEnd > wIn) {
-            try {
-                var textGroup = wordLayer.property("Text");
-                var textAnimators = textGroup.property("Animators") || textGroup.property("ADBE Text Animators");
-                if (textAnimators) {
-                    var anim = textAnimators.addProperty("ADBE Text Animator");
-                    anim.name = "CharReveal";
-                    var animProps = anim.property("ADBE Text Animator Properties");
-                    var opProp = animProps.addProperty("ADBE Text Opacity");
-                    opProp.setValue(0);
-                    var sel = anim.property("ADBE Text Selectors").addProperty("ADBE Text Selector");
-                    var startProp = sel.property("ADBE Text Percent Start");
-                    startProp.setValueAtTime(wIn, 0);
-                    startProp.setValueAtTime(wEnd, 100);
+                var p1 = wIn;
+                var p2 = wIn + (2 / fps);
+                var p3 = wIn + (4 / fps);
+                if (p3 < wOut) {
+                    scaleProp.setValueAtTime(p1, [88, 88, 100]);
+                    scaleProp.setValueAtTime(p2, [112, 112, 100]);
+                    scaleProp.setValueAtTime(p3, [100, 100, 100]);
                 }
-            } catch (crErr) {}
+            } else if (animType === "fade" && opacityProp) {
+                var fEnd = wIn + (3 / fps);
+                if (fEnd < wOut) {
+                    opacityProp.setValueAtTime(wIn, 0);
+                    opacityProp.setValueAtTime(fEnd, 100);
+                }
+            }
+
+            // Yopilish animatsiyasi (closeStart dan outPoint gacha)
+            if (cClose < wOut && cClose >= wIn) {
+                if (opacityProp) {
+                    opacityProp.setValueAtTime(cClose, 100);
+                    opacityProp.setValueAtTime(wOut, 0);
+                }
+                if (animType === "pop" && scaleProp) {
+                    scaleProp.setValueAtTime(cClose, [100, 100, 100]);
+                    scaleProp.setValueAtTime(wOut, [92, 92, 100]);
+                }
+            }
+
+            // Harf-harf ochilish (charReveal)
+            if (item.charReveal && wEnd > wIn) {
+                try {
+                    var textGroup = wordLayer.property("Text");
+                    var textAnimators = textGroup.property("Animators") || textGroup.property("ADBE Text Animators");
+                    if (textAnimators) {
+                        var anim = textAnimators.addProperty("ADBE Text Animator");
+                        anim.name = "CharReveal";
+                        var animProps = anim.property("ADBE Text Animator Properties");
+                        var opProp = animProps.addProperty("ADBE Text Opacity");
+                        opProp.setValue(0);
+                        var sel = anim.property("ADBE Text Selectors").addProperty("ADBE Text Selector");
+                        var startProp = sel.property("ADBE Text Percent Start");
+                        startProp.setValueAtTime(wIn, 0);
+                        startProp.setValueAtTime(wEnd, 100);
+                    }
+                } catch (crErr) {}
+            }
+
+            createdCount++;
+        } catch (wordErr) {
+            if (wordLayer) {
+                try { wordLayer.remove(); } catch (delErr) {}
+            }
+            errorCount++;
+            lastErrorMsg = wordErr.toString();
         }
-
-        // MUHIM QOIDA: Hech qachon textDoc.text = "" kaliti qo'yilmaydi!
-        // Shunda pauzada matn o'z holida qotib turadi.
-
-        createdCount++;
     }
 
     return JSON.stringify({
         ok: true,
         success: true,
         count: createdCount,
+        errors: errorCount,
+        lastError: lastErrorMsg,
         stats: wordPlan.stats || {},
-        message: createdCount + " ta so'z kaskad qatlamlari joylandi"
+        message: createdCount + " ta so'z kaskad qatlamlari joylandi" + (errorCount > 0 ? " (" + errorCount + " ta xato o'tkazib yuborildi)" : "")
     });
 }
 
 function ae_createSubtitles(payloadJson) {
     try {
-        if (!app.project || !app.project.activeItem || !(app.project.activeItem instanceof CompItem)) {
-            return JSON.stringify({ ok: false, success: false, message: "Aktiv kompozitsiya topilmadi!" });
+        var compRes = ae_resolveComp();
+        if (!compRes.comp) {
+            return JSON.stringify({ ok: false, success: false, message: compRes.error || "Aktiv kompozitsiya topilmadi!" });
         }
 
-        var comp = app.project.activeItem;
+        var comp = compRes.comp;
         var dataStr = payloadJson;
 
         // Agar URI encoded bo'lsa decode qilish (UTF-8 xavfsizligi)
@@ -1891,7 +2006,13 @@ function ae_createSubtitles(payloadJson) {
             // Oldingi mavjud bo'lgan AI subtitr qatlamlarini tozalash (ustma-ust minmasligi uchun)
             for (var l = comp.numLayers; l >= 1; l--) {
                 var curL = comp.layer(l);
-                if (curL && (curL.comment === "UZ_AI_SUBTITLE" || curL.name.indexOf("Subtitr ") === 0 || curL.name.indexOf("[AI Subtitr]") === 0 || curL.name.indexOf("[") === 0)) {
+                if (!curL) continue;
+                var isOurLayer = (curL.comment === "UZ_AI_SUBTITLE") ||
+                                 (curL.name.indexOf("[UZ_WORD]") === 0) ||
+                                 (curL.name.indexOf("[UZ-") === 0) ||
+                                 (curL.name.indexOf("[AI Subtitr]") === 0) ||
+                                 (curL.name.indexOf("Subtitr ") === 0);
+                if (isOurLayer) {
                     try {
                         curL.remove();
                     } catch (remErr) {}
@@ -1909,6 +2030,8 @@ function ae_createSubtitles(payloadJson) {
             var compW = comp.width;
             var compH = comp.height;
             var compDisplayOffset = (typeof comp.displayStartTime === "number") ? comp.displayStartTime : 0;
+            var clipOffsetSec = (data && typeof data.clipOffset === "number") ? data.clipOffset : ((data && typeof data.timelineOffset === "number") ? data.timelineOffset : 0.0);
+            var totalOffset = compDisplayOffset + clipOffsetSec;
             var origCompTime = comp.time;
 
             var fontSize = style.fontSize || Math.round(compH * 0.055);
@@ -1942,12 +2065,12 @@ function ae_createSubtitles(payloadJson) {
                 var segText = seg.text || "";
                 if (!segText.replace(/\s/g, "")) continue;
 
-                var sStart = parseFloat(seg.start) + compDisplayOffset;
-                var sEnd = parseFloat(seg.end) + compDisplayOffset;
+                var sStart = parseFloat(seg.start) + totalOffset;
+                var sEnd = parseFloat(seg.end) + totalOffset;
                 if (seg.words && seg.words.length > 0) {
-                    var fStart = parseFloat(seg.words[0].start) + compDisplayOffset;
-                    if (!isNaN(fStart) && fStart >= compDisplayOffset) sStart = fStart;
-                    var lEnd = parseFloat(seg.words[seg.words.length - 1].end) + compDisplayOffset;
+                    var fStart = parseFloat(seg.words[0].start) + totalOffset;
+                    if (!isNaN(fStart) && fStart >= totalOffset) sStart = fStart;
+                    var lEnd = parseFloat(seg.words[seg.words.length - 1].end) + totalOffset;
                     if (!isNaN(lEnd) && lEnd > sStart) sEnd = lEnd;
                 }
                 if (sEnd <= sStart) sEnd = sStart + 0.35;
@@ -1963,11 +2086,12 @@ function ae_createSubtitles(payloadJson) {
 
                 var textLayer = comp.layers.addText(segText);
                 textLayer.comment = "UZ_AI_SUBTITLE";
-                var animTag = seg.styleName || (seg.animType ? seg.animType.toUpperCase() : (style.animType ? style.animType.toUpperCase() : "POP"));
+                var rawTag = seg.styleName || (seg.animType ? seg.animType.toUpperCase() : (style.animType ? style.animType.toUpperCase() : "POP"));
+                var animTag = String(rawTag).replace(/[\[\]]/g, "").replace(/^\s+|\s+$/g, "");
                 var shortText = segText.length > 22 ? (segText.substring(0, 20) + "...") : segText;
-                textLayer.name = "[" + animTag + "] " + shortText;
+                textLayer.name = "[UZ-" + animTag + "] " + shortText;
 
-                textLayer.startTime = animIn;
+                // MUHIM (Sabab 9): startTime belgilanmaydi (0 da qoladi), faqat inPoint va outPoint!
                 textLayer.inPoint = animIn;
                 textLayer.outPoint = sEnd;
 
@@ -2007,12 +2131,20 @@ function ae_createSubtitles(payloadJson) {
                 var charReveal = !!(style && style.charReveal);
 
                 if (isWordByWord && seg.words && seg.words.length > 0) {
+                    // Sabab 10: Lop effektini oldini olish — birinchi so'zdan oldin bo'sh matn kaliti qo'yish
+                    try {
+                        var blankDoc = textProp.value;
+                        blankDoc.text = "";
+                        var blankTime = Math.max(textLayer.inPoint, sStart - (1.0 / (comp.frameRate || 25.0)));
+                        textProp.setValueAtTime(blankTime, blankDoc);
+                    } catch (bErr) {}
+
                     if (wordMode === "accumulate") {
                         // To'planib borsin: har bir so'z aytilganda qatorga qo'shiladi
                         for (var wIdx = 0; wIdx < seg.words.length; wIdx++) {
                             var wObj = seg.words[wIdx];
-                            var wTime = Math.max(textLayer.inPoint, parseFloat(wObj.start) + compDisplayOffset);
-                            var wEndTime = Math.max(wTime + 0.1, parseFloat(wObj.end) + compDisplayOffset);
+                            var wTime = Math.max(textLayer.inPoint, parseFloat(wObj.start) + totalOffset);
+                            var wEndTime = Math.max(wTime + 0.1, parseFloat(wObj.end) + totalOffset);
                             var pauseAfter = (typeof wObj.pause_after_ms === "number") ? (wObj.pause_after_ms / 1000.0) : 0.0;
 
                             var subWords = [];
@@ -2046,8 +2178,8 @@ function ae_createSubtitles(payloadJson) {
                         // Bitta so'z: faqat aytilayotgan so'z ko'rinadi
                         for (var sIdx = 0; sIdx < seg.words.length; sIdx++) {
                             var swObj = seg.words[sIdx];
-                            var swTime = Math.max(textLayer.inPoint, parseFloat(swObj.start) + compDisplayOffset);
-                            var swEndTime = Math.max(swTime + 0.1, parseFloat(swObj.end) + compDisplayOffset);
+                            var swTime = Math.max(textLayer.inPoint, parseFloat(swObj.start) + totalOffset);
+                            var swEndTime = Math.max(swTime + 0.1, parseFloat(swObj.end) + totalOffset);
                             var swPauseAfter = (typeof swObj.pause_after_ms === "number") ? (swObj.pause_after_ms / 1000.0) : 0.0;
                             var sWordText = swObj.word;
 
@@ -2076,7 +2208,7 @@ function ae_createSubtitles(payloadJson) {
                         try {
                             var tScale = textLayer.property("Transform").property("Scale");
                             for (var pIdx = 0; pIdx < seg.words.length; pIdx++) {
-                                var pwTime = Math.max(textLayer.inPoint, parseFloat(seg.words[pIdx].start) + compDisplayOffset);
+                                var pwTime = Math.max(textLayer.inPoint, parseFloat(seg.words[pIdx].start) + totalOffset);
                                 tScale.setValueAtTime(pwTime, [90, 90, 100]);
                                 tScale.setValueAtTime(pwTime + 0.08, [110, 110, 100]);
                                 tScale.setValueAtTime(pwTime + 0.16, [100, 100, 100]);
@@ -2105,8 +2237,8 @@ function ae_createSubtitles(payloadJson) {
 
                         for (var w = 0; w < seg.words.length; w++) {
                             var wordObj = seg.words[w];
-                            var wStart = Math.max(textLayer.inPoint, parseFloat(wordObj.start) + compDisplayOffset);
-                            var wEnd = Math.min(textLayer.outPoint, parseFloat(wordObj.end) + compDisplayOffset);
+                            var wStart = Math.max(textLayer.inPoint, parseFloat(wordObj.start) + totalOffset);
+                            var wEnd = Math.min(textLayer.outPoint, parseFloat(wordObj.end) + totalOffset);
 
                             startProp.setValueAtTime(wStart, w);
                             endProp.setValueAtTime(wStart, w + 1);
@@ -2200,6 +2332,29 @@ function ae_createSubtitles(payloadJson) {
 
     } catch (e) {
         return JSON.stringify({ ok: false, success: false, error: e.toString(), line: e.line || 0 });
+    }
+}
+
+function ae_createSubtitlesFromFile(filePath) {
+    try {
+        if (!filePath) {
+            return JSON.stringify({ ok: false, success: false, error: "Fayl yo'li ko'rsatilmadi" });
+        }
+        var cleanPath = String(filePath).replace(/\\/g, "/");
+        var f = new File(cleanPath);
+        if (!f.exists) {
+            return JSON.stringify({ ok: false, success: false, error: "Payload fayli topilmadi: " + cleanPath });
+        }
+        f.open("r");
+        f.encoding = "UTF-8";
+        var content = f.read();
+        f.close();
+        if (!content || content.length === 0) {
+            return JSON.stringify({ ok: false, success: false, error: "Payload fayli bo'sh: " + cleanPath });
+        }
+        return ae_createSubtitles(content);
+    } catch (e) {
+        return JSON.stringify({ ok: false, success: false, error: "Fayldan o'qishda xatolik: " + e.toString() });
     }
 }
 
@@ -2607,6 +2762,8 @@ function ae_createBeatMarkers(payloadJson) {
 // Barcha funksiyalarni ExtendScript global muhitiga ($.global) biriktirish
 if (typeof $ !== "undefined" && $.global) {
     $.global.JSON = JSON;
+    $.global.UZ_JSX_VERSION = UZ_JSX_VERSION;
+    $.global.host_getVersion = host_getVersion;
     $.global.getHostAppName = getHostAppName;
     $.global.host_runDiagnostics = host_runDiagnostics;
     $.global.ppro_getSeq = ppro_getSeq;
@@ -2618,11 +2775,13 @@ if (typeof $ !== "undefined" && $.global) {
     $.global.ppro_insertSingleMogrtAtPlayhead = ppro_insertSingleMogrtAtPlayhead;
     $.global.ppro_createBeatMarkers = ppro_createBeatMarkers;
     $.global.ppro_autoCutAtBeats = ppro_autoCutAtBeats;
+    $.global.ae_resolveComp = ae_resolveComp;
     $.global.ae_getCompInfo = ae_getCompInfo;
     $.global.ae_setPlayhead = ae_setPlayhead;
     $.global.ae_getSelectedLayerMediaPath = ae_getSelectedLayerMediaPath;
     $.global.ae_writeWordStackLayers = ae_writeWordStackLayers;
     $.global.ae_createSubtitles = ae_createSubtitles;
+    $.global.ae_createSubtitlesFromFile = ae_createSubtitlesFromFile;
     $.global.ae_extractSelectedTextStyle = ae_extractSelectedTextStyle;
     $.global.ae_applyStyleToLayers = ae_applyStyleToLayers;
     $.global.ae_createBeatMarkers = ae_createBeatMarkers;
