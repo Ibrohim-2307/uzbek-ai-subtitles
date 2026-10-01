@@ -95,6 +95,13 @@ def health_check():
     except Exception:
         pass
 
+    timing_engine_info = "provider_estimate"
+    try:
+        from .utils.timing_aligner import check_timing_engine_status
+        timing_engine_info = check_timing_engine_status()
+    except Exception:
+        pass
+
     return {
         "status": "online",
         "message": "O'zbekcha AI Subtitr Backend faol",
@@ -102,7 +109,8 @@ def health_check():
         "device_name": gpu_name,
         "ffmpeg_available": check_ffmpeg(),
         "active_provider": config_manager.config.get("provider", "local_whisper"),
-        "model_size": config_manager.config.get("model_size", "small")
+        "model_size": config_manager.config.get("model_size", "small"),
+        "timing_engine": timing_engine_info
     }
 
 
@@ -389,14 +397,30 @@ async def transcribe_audio(
             "pauses_found": 0
         }
 
-        # B) Forced Alignment (ixtiyoriy, torchaudio MMS mavjud bo'lsa)
+        # B) Forced Alignment (ixtiyoriy, torchaudio MMS yoki lokal Whisper o'lchovi)
         if do_forced_align and all_raw_words and wav_path and os.path.exists(wav_path):
             mms_words, mms_status = align_with_mms(wav_path, [w.model_dump() for w in all_raw_words], language="uz")
             if mms_words:
                 alignment_method_used = "torchaudio_mms_fa"
                 all_raw_words = [WordItem(**mw) for mw in mms_words]
             else:
-                print(f"[Alignment] {mms_status}")
+                # MMS bo'lmasa, provayder vaqtlarini lokal faster-whisper bilan audiodan o'lchash
+                if selected_provider != "local_whisper":
+                    try:
+                        from .utils.timing_aligner import measure_and_align_words
+                        tw_words, tw_stats, tw_ok = measure_and_align_words(
+                            wav_path,
+                            [w.model_dump() for w in all_raw_words],
+                            model_size="tiny",
+                            language=language or "uz"
+                        )
+                        if tw_ok and tw_words:
+                            alignment_method_used = "local_whisper_measured"
+                            all_raw_words = [WordItem(**tw) for tw in tw_words]
+                    except Exception as e:
+                        print(f"[Timing Aligner] Whisper o'lchov xatosi: {e}")
+                else:
+                    print(f"[Alignment] {mms_status}")
 
         # C) Ovoz energiyasi va sukut/pauza bilan aniqlashtirish (Audio Energy Snapping)
         if do_audio_snap and all_raw_words and wav_path and os.path.exists(wav_path):

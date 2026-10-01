@@ -130,6 +130,7 @@ def detect_pauses_and_onsets(
     # Gradient/diff orqali aniqlanadi
     diff_e = np.diff(energy)
     onsets: List[float] = []
+    valid_onsets: List[float] = []
     offsets: List[float] = []
 
     # Onset kandidatlari
@@ -138,7 +139,15 @@ def detect_pauses_and_onsets(
         # Agar energiya keskin oshsa va sukutdan nutqqa o'tayotgan bo'lsa
         if diff_e[i] > 0.004 and energy[i] > speech_threshold:
             if i > 0 and energy[i - 1] <= speech_threshold:
-                onsets.append(round(t, 3))
+                onset_t = round(t, 3)
+                onsets.append(onset_t)
+                # Onset attack sakrashi (>=2.5x energiya ko'tarilishi)
+                pre_idx = max(0, i - 2)
+                post_idx = min(len(energy) - 1, i + 2)
+                pre_e = energy[pre_idx] + 1e-6
+                post_e = energy[post_idx]
+                if (post_e / pre_e) >= 2.2:
+                    valid_onsets.append(onset_t)
         # Offset kandidatlari: nutqdan sukutga o'tish
         elif diff_e[i] < -0.004 and energy[i] <= speech_threshold:
             if i > 0 and energy[i - 1] > speech_threshold:
@@ -147,6 +156,7 @@ def detect_pauses_and_onsets(
     return {
         "pauses": pauses,
         "onsets": onsets,
+        "valid_onsets": valid_onsets if valid_onsets else onsets,
         "offsets": offsets,
         "noise_floor": round(noise_floor, 5),
         "speech_threshold": round(speech_threshold, 5)
@@ -323,11 +333,14 @@ def snap_word_timestamps_to_audio(
     offsets = []
     pauses = []
 
+    valid_onsets = []
+
     if has_audio:
         try:
             energy, time_axis, sr = compute_energy_envelope(wav_path, frame_ms=10.0, hop_ms=10.0)
             analysis = detect_pauses_and_onsets(energy, time_axis, min_pause_ms=min_pause_ms)
             onsets = analysis["onsets"]
+            valid_onsets = analysis.get("valid_onsets", onsets)
             offsets = analysis["offsets"]
             pauses = analysis["pauses"]
         except Exception as e:
@@ -363,13 +376,20 @@ def snap_word_timestamps_to_audio(
         cur_start = orig_start
         cur_end = orig_end
 
-        # 1. Start vaqtini eng yaqin onset'ga tortish (±150 ms)
+        # 1. Start vaqtini eng yaqin onset'ga tortish (±150 ms yoki keng 450 ms)
         if onsets:
             cands = [o for o in onsets if abs(o - orig_start) <= window_sec]
             if cands:
                 # Eng yaqin onset
                 best_onset = min(cands, key=lambda o: abs(o - orig_start))
                 cur_start = best_onset
+            elif valid_onsets:
+                # Keng snap (450 ms): agar 150 ms da topilmasa, lekin valid onset 450 ms da bo'lsa
+                wide_cands = [o for o in valid_onsets if abs(o - orig_start) <= 0.450]
+                if wide_cands:
+                    best_wide = min(wide_cands, key=lambda o: abs(o - orig_start))
+                    if abs(best_wide - orig_start) >= 0.06:
+                        cur_start = best_wide
 
         # 2. End vaqtini eng yaqin offset'ga tortish (±150 ms)
         if offsets:

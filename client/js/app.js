@@ -477,13 +477,25 @@ function initTranscribeSection() {
                               "Bu holda so'z vaqtlari audio bilan tekshirilmaydi va ASR kechikishi (masalan +400 ms) tuzatilmaydi — so'zlar kech yoki erta chiqadi.\n" +
                               "Iltimos, uni YOQIB, transkripsiyani qaytadan boshlang.");
                     }
-                    if (result && result.diagnostics && result.diagnostics.global_offset_applied) {
-                        const gOffMs = result.diagnostics.global_offset_ms || 0;
-                        const supCnt = result.diagnostics.support_count || 0;
-                        const sign = gOffMs >= 0 ? "+" : "";
-                        const lagMsg = `🎯 ASR kechikishi aniqlandi va tuzatildi: ${sign}${Math.round(gOffMs)} ms (${supCnt} ta so'z audio bilan moslandi)`;
-                        console.log(lagMsg);
-                        if (progressStatus) progressStatus.textContent = lagMsg;
+                    if (result && result.diagnostics) {
+                        const diag = result.diagnostics;
+                        const alignMethod = diag.alignment_method || "";
+                        if (alignMethod.indexOf("local_whisper_measured") !== -1) {
+                            const measMsg = "🎯 So'z vaqtlari audio orqali O'LCHANDI: lokal Whisper o'lchovi";
+                            console.log(measMsg);
+                            if (progressStatus) progressStatus.textContent = measMsg;
+                        } else if (alignMethod.indexOf("torchaudio_mms_fa") !== -1) {
+                            const measMsg = "🎯 So'z vaqtlari audio orqali O'LCHANDI: MMS majburiy tekislash o'lchovi";
+                            console.log(measMsg);
+                            if (progressStatus) progressStatus.textContent = measMsg;
+                        } else if (diag.global_offset_applied) {
+                            const gOffMs = diag.global_offset_ms || 0;
+                            const supCnt = diag.support_count || 0;
+                            const sign = gOffMs >= 0 ? "+" : "";
+                            const lagMsg = `🎯 ASR kechikishi aniqlandi va tuzatildi: ${sign}${Math.round(gOffMs)} ms (${supCnt} ta so'z audio bilan moslandi)`;
+                            console.log(lagMsg);
+                            if (progressStatus) progressStatus.textContent = lagMsg;
+                        }
                     }
                     if (result.status === "success" && result.segments) {
                         const offsetAlreadyApplied = result.offset_applied === true;
@@ -1453,6 +1465,12 @@ function renderDiagnosticsReport(report) {
     html += `<div>${ext.selection && ext.selection.count > 0 ? "🎯" : "ℹ️"} <strong>Tanlov:</strong> ${ext.selection ? ext.selection.count + " ta klip/qatlam" : "Klip tanlanmagan"}</div>`;
     html += `<div>${canWrite ? "✅" : "⚠️"} <strong>Fayl ruxsati (AE):</strong> ${canWrite ? "Mavjud" : "Cheklangan (Preferences > Scripting da ruxsat bering)"}</div>`;
     html += `<div>${isBackendOk ? "✅" : "❌"} <strong>AI Backend:</strong> ${isBackendOk ? "Faol (" + (backend.active_provider || "AI") + ")" : "Ulanmagan (start_backend.bat)"}</div>`;
+    if (backend && backend.timing_engine) {
+        const tEngine = backend.timing_engine;
+        const eName = (typeof tEngine === "object" ? tEngine.recommended_engine : tEngine) || "whisper";
+        const eAcc = (typeof tEngine === "object" ? tEngine.timing_accuracy : "") || "";
+        html += `<div>🎯 <strong>Vaqt Dvigateli:</strong> ${eName} (${eAcc || "faol"})</div>`;
+    }
 
     diagList.innerHTML = html;
 }
