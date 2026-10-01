@@ -4,6 +4,7 @@ Adobe After Effects va Premiere Pro panellari bilan localhost orqali muloqot qil
 """
 
 import os
+import math
 import zipfile
 import shutil
 import tempfile
