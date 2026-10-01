@@ -397,16 +397,17 @@ const HostBridge = {
         }
 
         // 9.2 Klip offseti — ikki marta siljishdan himoya
-        if (off !== 0 && segments && segments.length > 0) {
+        let effectiveOff = off;
+        if (effectiveOff !== 0 && segments && segments.length > 0) {
             const firstSeg = segments[0];
             const isTimelineTimebase = (firstSeg.timebase === "timeline" || firstSeg.offset_applied === true);
             const firstWord = (firstSeg.words && firstSeg.words[0]) ? firstSeg.words[0] : null;
             const alreadyShifted = firstWord && typeof firstWord.raw_start === "number" &&
-                (firstWord.start > firstWord.raw_start && Math.abs((firstWord.start - firstWord.raw_start) - off) < 0.1);
+                (firstWord.start > firstWord.raw_start && Math.abs((firstWord.start - firstWord.raw_start) - effectiveOff) < 0.1);
 
             if (isTimelineTimebase || alreadyShifted) {
                 logDebug("IKKI MARTA SILJISH TO'XTATILDI: Klip offseti allaqachon qo'shilgan, qayta qo'shish bekor qilindi");
-                off = 0.0;
+                effectiveOff = 0.0;
             }
         }
 
@@ -414,18 +415,36 @@ const HostBridge = {
             ? (t) => window.UzbekUtils.snapToFrame(t, currentFps)
             : (t) => Number((Math.round(t * currentFps) / currentFps).toFixed(9));
 
-        // Har bir segmentning boshlanish va tugash vaqtlarini aniqlash
-        let timelineSegments = (off !== 0) ? segments.map((seg, idx) => ({
-            ...seg,
-            id: idx + 1,
-            start: Math.max(0, snapFn(seg.start + off)),
-            end: Math.max(0.1, snapFn(seg.end + off)),
-            words: (seg.words || []).map(w => ({
-                ...w,
-                start: Math.max(0, snapFn(w.start + off)),
-                end: Math.max(0.1, snapFn(w.end + off))
-            }))
-        })) : segments;
+        // Har bir segment va so'z vaqtini har doim kadrga yaxlitlash (snapFn har doim ishlaydi)
+        let timelineSegments = segments.map((seg, idx) => {
+            const rawStart = Number(seg.start) + effectiveOff;
+            const rawEnd = Number(seg.end) + effectiveOff;
+            let start = snapFn(rawStart);
+            let end = snapFn(rawEnd);
+            if (end <= start) {
+                end = snapFn(start + (1.0 / currentFps));
+            }
+            return {
+                ...seg,
+                id: idx + 1,
+                start: Math.max(0, start),
+                end: Math.max(0.1, end),
+                words: (seg.words || []).map((w) => {
+                    const rawWStart = Number(w.start) + effectiveOff;
+                    const rawWEnd = Number(w.end) + effectiveOff;
+                    let wStart = snapFn(rawWStart);
+                    let wEnd = snapFn(rawWEnd);
+                    if (wEnd <= wStart) {
+                        wEnd = snapFn(wStart + (1.0 / currentFps));
+                    }
+                    return {
+                        ...w,
+                        start: Math.max(0, wStart),
+                        end: Math.max(0.1, wEnd)
+                    };
+                })
+            };
+        });
 
         // Qat'iy ko'pi bilan 1 yoki 2 qator bo'lishini ta'minlash (hech qachon 3-4 qator bo'lmaydi)
         function enforceTwoLines(segs) {
