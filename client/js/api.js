@@ -134,10 +134,15 @@ const SubtitleAPI = {
         if (options.pauseHideThresholdMs !== undefined) formData.append("pause_hide_threshold_ms", options.pauseHideThresholdMs);
         if (options.charReveal !== undefined) formData.append("char_reveal", options.charReveal);
 
-        const response = await fetch(`${API_BASE_URL}/transcribe`, {
-            method: "POST",
-            body: formData
-        });
+        let response;
+        try {
+            response = await fetch(`${API_BASE_URL}/transcribe`, {
+                method: "POST",
+                body: formData
+            });
+        } catch (netErr) {
+            throw new Error("Python Backend serverga ulanib bo'lmadi (http://127.0.0.1:8765).\nIltimos, 'scripts/start_backend.bat' orqali serverni ishga tushiring!");
+        }
 
         if (!response.ok) {
             const errData = await response.json().catch(() => ({ detail: "Noma'lum xatolik" }));
