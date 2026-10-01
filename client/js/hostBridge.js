@@ -427,6 +427,8 @@ const HostBridge = {
             return {
                 ...seg,
                 id: idx + 1,
+                timebase: "timeline",
+                offset_applied: true,
                 start: Math.max(0, start),
                 end: Math.max(0.1, end),
                 words: (seg.words || []).map((w) => {
