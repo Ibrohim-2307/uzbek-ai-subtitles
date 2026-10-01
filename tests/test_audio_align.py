@@ -574,6 +574,26 @@ class TestAudioAlign(unittest.TestCase):
                 drift = abs(computed - expected)
                 self.assertLess(drift, 1e-9)
 
+    # 47. TEST 16: _read_wav_data non-RIFF / video container fallback
+    def test_47_regression_test_16_read_wav_data_fallback(self):
+        from unittest.mock import patch
+        import shutil
+        corrupt_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        corrupt_path = corrupt_file.name
+        corrupt_file.write(b"\x00\x00\x00 ftypisom\x00\x00\x02\x00")
+        corrupt_file.close()
+        try:
+            with patch("backend.utils.audio.convert_to_16k_mono_wav") as mock_conv:
+                mock_conv.side_effect = lambda inp, out: shutil.copyfile(self.tmp_path, out)
+                from backend.utils.audio_aligner import _read_wav_data
+                sr, data = _read_wav_data(corrupt_path)
+                self.assertEqual(sr, 16000)
+                self.assertGreater(len(data), 0)
+        finally:
+            if os.path.exists(corrupt_path):
+                os.remove(corrupt_path)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

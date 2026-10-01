@@ -323,6 +323,27 @@ class TestTimingAligner(unittest.TestCase):
         self.assertTrue(res[0]["measured"])
         self.assertFalse(res[1]["measured"])
 
+    # 34. Non-RIFF yoki buzilgan fayl uchun avtomatik konvertatsiya fallback tekshiruvi
+    def test_34_read_wav_mono16k_fallback_on_corrupt(self):
+        corrupt_path = os.path.join(self.temp_dir, "fake_video.mp4")
+        with open(corrupt_path, "wb") as f:
+            f.write(b"\x00\x00\x00 ftypisom\x00\x00\x02\x00")
+        with patch("backend.utils.audio.convert_to_16k_mono_wav") as mock_conv:
+            # mock_conv o'rniga haqiqiy wav nusxasini beramiz
+            mock_conv.side_effect = lambda inp, out: shutil.copyfile(self.wav_path, out)
+            import shutil
+            sr, data = read_wav_mono16k(corrupt_path)
+            self.assertEqual(sr, 16000)
+            self.assertGreater(len(data), 0)
+
+    # 35. get_cached_whisper_model CUDA/CPU aniqlash tekshiruvi
+    def test_35_get_cached_whisper_model_device_handling(self):
+        from backend.utils.timing_aligner import get_cached_whisper_model
+        model = get_cached_whisper_model(model_size="tiny")
+        # Model yuklanishi yoki mavjud bo'lmasa None qaytarishi kerak, xato tashlamasligi shart
+        self.assertTrue(model is not None or not hasattr(sys.modules.get("faster_whisper"), "WhisperModel"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

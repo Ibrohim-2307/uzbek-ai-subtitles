@@ -18,34 +18,53 @@ except ImportError:
 
 
 def _read_wav_data(wav_path: str) -> Tuple[int, np.ndarray]:
-    """16kHz mono WAV fayldan audio signal massivini o'qiydi"""
-    if SCIPY_AVAILABLE:
-        sr, data = wavfile.read(wav_path)
-        # Agar stereo bo'lsa, monoga o'tkazamiz
-        if len(data.shape) > 1:
-            data = data.mean(axis=1)
-        # Float massivga (-1.0 ... 1.0 oralig'iga) keltirish
-        if data.dtype == np.int16:
-            data = data.astype(np.float32) / 32768.0
-        elif data.dtype == np.int32:
-            data = data.astype(np.float32) / 2147483648.0
-        elif data.dtype == np.uint8:
-            data = (data.astype(np.float32) - 128.0) / 128.0
-        else:
-            data = data.astype(np.float32)
-        return sr, data
+    """16kHz mono WAV fayldan audio signal massivini o'qiydi (non-RIFF/video konteynerlar uchun avtomatik konvertatsiya bilan)"""
+    def _parse(path_to_read: str) -> Tuple[int, np.ndarray]:
+        if SCIPY_AVAILABLE:
+            sr, data = wavfile.read(path_to_read)
+            # Agar stereo bo'lsa, monoga o'tkazamiz
+            if len(data.shape) > 1:
+                data = data.mean(axis=1)
+            # Float massivga (-1.0 ... 1.0 oralig'iga) keltirish
+            if data.dtype == np.int16:
+                data = data.astype(np.float32) / 32768.0
+            elif data.dtype == np.int32:
+                data = data.astype(np.float32) / 2147483648.0
+            elif data.dtype == np.uint8:
+                data = (data.astype(np.float32) - 128.0) / 128.0
+            else:
+                data = data.astype(np.float32)
+            return sr, data
 
-    # Muqobil: standard wave kutubxonasi
-    import wave
-    with wave.open(wav_path, "rb") as wf:
-        sr = wf.getframerate()
-        n_channels = wf.getnchannels()
-        n_frames = wf.getnframes()
-        raw_bytes = wf.readframes(n_frames)
-        data = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        if n_channels > 1:
-            data = data.reshape(-1, n_channels).mean(axis=1)
-        return sr, data
+        # Muqobil: standard wave kutubxonasi
+        import wave
+        with wave.open(path_to_read, "rb") as wf:
+            sr = wf.getframerate()
+            n_channels = wf.getnchannels()
+            n_frames = wf.getnframes()
+            raw_bytes = wf.readframes(n_frames)
+            data = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            if n_channels > 1:
+                data = data.reshape(-1, n_channels).mean(axis=1)
+            return sr, data
+
+    try:
+        return _parse(wav_path)
+    except Exception:
+        # Fayl non-RIFF (masalan MP4/MP3) yoki sarlavhasi mos kelmasa, vaqtincha 16k WAV ga o'tkazib o'qiymiz
+        import tempfile
+        from .audio import convert_to_16k_mono_wav
+        tmp_w = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        try:
+            tmp_w.close()
+            convert_to_16k_mono_wav(wav_path, tmp_w.name)
+            return _parse(tmp_w.name)
+        finally:
+            if os.path.exists(tmp_w.name):
+                try:
+                    os.remove(tmp_w.name)
+                except Exception:
+                    pass
 
 
 def compute_energy_envelope(

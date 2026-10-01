@@ -88,12 +88,20 @@ def health_check():
     has_gpu = False
     gpu_name = "CPU"
     try:
-        import torch
-        if torch.cuda.is_available():
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
             has_gpu = True
-            gpu_name = torch.cuda.get_device_name(0)
+            gpu_name = "NVIDIA GPU (CUDA)"
     except Exception:
         pass
+    if not has_gpu:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                has_gpu = True
+                gpu_name = torch.cuda.get_device_name(0)
+        except Exception:
+            pass
 
     timing_engine_info = "provider_estimate"
     try:
@@ -364,12 +372,15 @@ async def transcribe_audio(
         if duration_sec is None and out_point is not None and in_point is not None and out_point > in_point:
             duration_sec = out_point - in_point
 
-        # 2. 16kHz mono WAV ga o'tkazish (Whisper uchun har doim 16k mono bo'lishi shart)
-        wav_path = actual_input_path
-        if selected_provider == "local_whisper":
-            temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            temp_files_to_clean.append(temp_wav.name)
+        # 2. 16kHz mono WAV ga o'tkazish (Whisper, MMS, Audio Snapper va Timing Aligner uchun 16k mono bo'lishi shart)
+        # Barcha provayderlar (Gemini, Local Whisper va h.k.) uchun qirqilgan 16k WAV tayyorlanadi
+        temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        temp_files_to_clean.append(temp_wav.name)
+        try:
             wav_path = convert_to_16k_mono_wav(actual_input_path, temp_wav.name, start_sec=start_sec, duration_sec=duration_sec)
+        except Exception as conv_err:
+            print(f"[WAV Konvertatsiya] Xatolik: {conv_err}. Asl fayl ishlatiladi.")
+            wav_path = actual_input_path
 
         # 3. STT provayderini chaqirish (Avtomatik zaxira bilan)
         m_size = model_size or cfg.get("model_size", "small")
@@ -468,10 +479,12 @@ async def transcribe_audio(
                 if selected_provider != "local_whisper":
                     try:
                         from .utils.timing_aligner import measure_and_align_words
+                        cached_small = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub", "models--Systran--faster-whisper-small")
+                        align_model = "small" if os.path.exists(cached_small) else "tiny"
                         tw_words, tw_stats, tw_ok = measure_and_align_words(
                             wav_path,
                             [w.model_dump() for w in all_raw_words],
-                            model_size="tiny",
+                            model_size=align_model,
                             language=language or "uz"
                         )
                         if tw_ok and tw_words:

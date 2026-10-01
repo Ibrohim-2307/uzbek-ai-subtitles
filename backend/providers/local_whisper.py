@@ -34,15 +34,24 @@ class LocalWhisperProvider(BaseSTTProvider):
         compute = self.compute_type
 
         if device == "auto":
+            is_cuda = False
             try:
-                import torch
-                if torch.cuda.is_available():
-                    device = "cuda"
-                    compute = "float16" if compute == "auto" else compute
-                else:
-                    device = "cpu"
-                    compute = "int8" if compute == "auto" else compute
+                import ctranslate2
+                is_cuda = (ctranslate2.get_cuda_device_count() > 0)
             except Exception:
+                pass
+
+            if not is_cuda:
+                try:
+                    import torch
+                    is_cuda = torch.cuda.is_available()
+                except Exception:
+                    pass
+
+            if is_cuda:
+                device = "cuda"
+                compute = "float16" if compute == "auto" else compute
+            else:
                 device = "cpu"
                 compute = "int8" if compute == "auto" else compute
 

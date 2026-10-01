@@ -460,6 +460,7 @@ function initTranscribeSection() {
                         duration: c.duration !== undefined ? c.duration : null,
                         provider: provider,
                         modelSize: modelSize,
+                        forcedAlignment: true,
                         audioEnergySnap: audioEnergySnap,
                         pauseHideText: pauseHideText,
                         pauseHideThresholdMs: pauseHideThresholdMs,

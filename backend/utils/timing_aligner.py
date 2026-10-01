@@ -29,35 +29,55 @@ _CACHED_MODEL_SIZE = None
 def read_wav_mono16k(wav_path: str) -> Tuple[int, np.ndarray]:
     """
     16kHz mono WAV faylni PyAV/ffmpeg'siz sof Python/scipy/wave orqali o'qiydi.
+    Agar fayl non-RIFF yoki video konteyner bo'lsa, vaqtincha 16k WAV ga o'tkazib o'qiydi.
     Qaytaradi: (sample_rate, np.ndarray[float32])
     """
     if not os.path.exists(wav_path):
         raise FileNotFoundError(f"WAV fayl topilmadi: {wav_path}")
 
-    if SCIPY_AVAILABLE:
-        sr, data = wavfile.read(wav_path)
-        if len(data.shape) > 1:
-            data = data.mean(axis=1)
-        if data.dtype == np.int16:
-            data = data.astype(np.float32) / 32768.0
-        elif data.dtype == np.int32:
-            data = data.astype(np.float32) / 2147483648.0
-        elif data.dtype == np.uint8:
-            data = (data.astype(np.float32) - 128.0) / 128.0
-        else:
-            data = data.astype(np.float32)
-        return sr, data
+    def _parse_wav(target_path: str) -> Tuple[int, np.ndarray]:
+        if SCIPY_AVAILABLE:
+            sr, data = wavfile.read(target_path)
+            if len(data.shape) > 1:
+                data = data.mean(axis=1)
+            if data.dtype == np.int16:
+                data = data.astype(np.float32) / 32768.0
+            elif data.dtype == np.int32:
+                data = data.astype(np.float32) / 2147483648.0
+            elif data.dtype == np.uint8:
+                data = (data.astype(np.float32) - 128.0) / 128.0
+            else:
+                data = data.astype(np.float32)
+            return sr, data
 
-    import wave
-    with wave.open(wav_path, "rb") as wf:
-        sr = wf.getframerate()
-        n_channels = wf.getnchannels()
-        n_frames = wf.getnframes()
-        raw_bytes = wf.readframes(n_frames)
-        data = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        if n_channels > 1:
-            data = data.reshape(-1, n_channels).mean(axis=1)
-        return sr, data
+        import wave
+        with wave.open(target_path, "rb") as wf:
+            sr = wf.getframerate()
+            n_channels = wf.getnchannels()
+            n_frames = wf.getnframes()
+            raw_bytes = wf.readframes(n_frames)
+            data = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            if n_channels > 1:
+                data = data.reshape(-1, n_channels).mean(axis=1)
+            return sr, data
+
+    try:
+        return _parse_wav(wav_path)
+    except Exception:
+        # Fayl non-RIFF (masalan MP4/MP3) yoki noto'g'ri sarlavhali bo'lsa, FFmpeg orqali vaqtincha 16k WAV ga o'tkazamiz
+        import tempfile
+        from .audio import convert_to_16k_mono_wav
+        tmp_w = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        try:
+            tmp_w.close()
+            convert_to_16k_mono_wav(wav_path, tmp_w.name)
+            return _parse_wav(tmp_w.name)
+        finally:
+            if os.path.exists(tmp_w.name):
+                try:
+                    os.remove(tmp_w.name)
+                except Exception:
+                    pass
 
 
 CYR_TO_LAT = {
@@ -150,18 +170,36 @@ def phonetic_similarity(w1: str, w2: str) -> float:
 
 
 def get_cached_whisper_model(model_size: str = "tiny") -> Optional[Any]:
-    """Faster-whisper modelini keshlaydi"""
+    """Faster-whisper modelini keshlaydi (Nvidia GPU/CUDA mavjud bo'lsa float16, aks holda CPU int8)"""
     global _CACHED_WHISPER_MODEL, _CACHED_MODEL_SIZE
     if not FASTER_WHISPER_AVAILABLE:
         return None
 
     if _CACHED_WHISPER_MODEL is None or _CACHED_MODEL_SIZE != model_size:
         try:
-            _CACHED_WHISPER_MODEL = WhisperModel(
-                model_size,
-                device="cpu",
-                compute_type="int8"
-            )
+            device = "cpu"
+            compute_type = "int8"
+            try:
+                import ctranslate2
+                if ctranslate2.get_cuda_device_count() > 0:
+                    device = "cuda"
+                    compute_type = "float16"
+            except Exception:
+                pass
+
+            try:
+                _CACHED_WHISPER_MODEL = WhisperModel(
+                    model_size,
+                    device=device,
+                    compute_type=compute_type
+                )
+            except Exception:
+                # Agar CUDA drayver xatosi bersa, CPU ga fallback
+                _CACHED_WHISPER_MODEL = WhisperModel(
+                    model_size,
+                    device="cpu",
+                    compute_type="int8"
+                )
             _CACHED_MODEL_SIZE = model_size
         except Exception as e:
             print(f"[Timing Aligner] WhisperModel yuklashda xatolik: {e}")
