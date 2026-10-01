@@ -180,6 +180,86 @@ test("rechunkSegments karaoke so'z vaqtlarini saqlashi", () => {
     });
 });
 
+// 12. chunkWordsSmart pauzalar bo'yicha bo'laklash
+test("chunkWordsSmart pauzalar bo'yicha bo'laklash", () => {
+    const words = [
+        { word: "Bugun", start: 0.0, end: 0.3 },
+        { word: "biz", start: 0.35, end: 0.6 },
+        { word: "darsda", start: 0.65, end: 1.0 },
+        { word: "gaplashamiz", start: 1.5, end: 2.2 }, // pause = 0.5s >= 0.35s
+        { word: "ertaga", start: 2.25, end: 2.7 }
+    ];
+    const chunks = UzbekUtils.chunkWordsSmart(words);
+    assert.strictEqual(chunks.length, 2);
+    assert.deepStrictEqual(chunks[0].map(w => w.word), ["Bugun", "biz", "darsda"]);
+    assert.deepStrictEqual(chunks[1].map(w => w.word), ["gaplashamiz", "ertaga"]);
+});
+
+// 13. chunkWordsSmart tinish belgilari bo'yicha bo'laklash
+test("chunkWordsSmart tinish belgilari bo'yicha bo'laklash", () => {
+    const words = [
+        { word: "Dars", start: 0.0, end: 0.3 },
+        { word: "boshlandi.", start: 0.35, end: 0.9 }, // . punctuation, len "Dars boshlandi." = 15 >= 12
+        { word: "Hamma", start: 0.95, end: 1.3 },
+        { word: "eshitsin", start: 1.35, end: 1.8 }
+    ];
+    const chunks = UzbekUtils.chunkWordsSmart(words);
+    assert.strictEqual(chunks.length, 2);
+    assert.deepStrictEqual(chunks[0].map(w => w.word), ["Dars", "boshlandi."]);
+    assert.deepStrictEqual(chunks[1].map(w => w.word), ["Hamma", "eshitsin"]);
+});
+
+// 14. chunkWordsSmart majburiy chegaralar (7 so'z / 56 belgi)
+test("chunkWordsSmart majburiy chegaralar (7 so'z / 56 belgi)", () => {
+    const words = [];
+    for (let i = 0; i < 14; i++) {
+        words.push({ word: `soz${i}`, start: i * 0.2, end: i * 0.2 + 0.18 });
+    }
+    const chunks = UzbekUtils.chunkWordsSmart(words, { maxWords: 7, maxCharsLine: 28, maxLines: 2 });
+    assert.strictEqual(chunks.length, 2);
+    assert.strictEqual(chunks[0].length, 7);
+    assert.strictEqual(chunks[1].length, 7);
+});
+
+// 15. chunkWordsSmart yetim so'zni birlashtirish (orphan merge)
+test("chunkWordsSmart yetim so'zni birlashtirish (orphan merge)", () => {
+    const words = [
+        { word: "Bu", start: 0.0, end: 0.2 },
+        { word: "katta", start: 0.25, end: 0.5 },
+        { word: "mavzu;", start: 0.55, end: 0.8 }, // len "Bu katta mavzu;" = 15 >= 12
+        { word: "ha", start: 0.85, end: 1.0 }       // "ha" = 2 chars < 12 chars orphan!
+    ];
+    const chunks = UzbekUtils.chunkWordsSmart(words);
+    assert.strictEqual(chunks.length, 1);
+    assert.deepStrictEqual(chunks[0].map(w => w.word), ["Bu", "katta", "mavzu;", "ha"]);
+});
+
+// 16. Word start binding va rechunkSegments yangi qoidasi
+test("Word start binding va rechunkSegments yangi qoidasi", () => {
+    const segs = [{
+        id: 1,
+        start: 0.0,
+        end: 5.0,
+        text: "bugungi darsda ozbekistonda suniy intellekt haqida gaplashamiz",
+        words: [
+            { word: "bugungi", start: 0.12, end: 0.6 },
+            { word: "darsda", start: 0.65, end: 1.1 },
+            { word: "ozbekistonda", start: 1.15, end: 2.0 },
+            { word: "suniy", start: 2.05, end: 2.5 },
+            { word: "intellekt", start: 2.55, end: 3.2 },
+            { word: "haqida", start: 3.25, end: 3.8 },
+            { word: "gaplashamiz", start: 4.5, end: 4.9 } // pause = 0.7s >= 0.35s
+        ]
+    }];
+    const rechunked = UzbekUtils.rechunkSegments(segs, { fps: 25 });
+    assert.strictEqual(rechunked.length, 2);
+    // Word start binding tekshiruvi:
+    assert.strictEqual(rechunked[0].start, rechunked[0].words[0].start);
+    assert.strictEqual(rechunked[1].start, rechunked[1].words[0].start);
+    assert.strictEqual(rechunked[0].words[0].word, "bugungi");
+    assert.strictEqual(rechunked[1].words[0].word, "gaplashamiz");
+});
+
 console.log(`\n=======================================================`);
 console.log(`🎉 BARCHA UZBEK UTILS TESTLARI (${passCount} ta guruh) MUVAFFAQIYATLI O'TDI!`);
 console.log(`=======================================================`);

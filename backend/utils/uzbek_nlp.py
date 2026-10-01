@@ -9,7 +9,7 @@ O'zbekcha AI Subtitr - O'zbek Tili NLP va Matn Qayta Ishlash Moduli
 """
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Belgilar standarti
 APOS_OFFICIAL_OG = "\u02bb"   # ʻ (Modifier Letter Turned Comma)
@@ -777,6 +777,110 @@ def split_subtitle_text(text: str, max_chars: int = 42, max_lines: int = 2) -> s
     """Orqaga moslik uchun: qatorlarni \\n bilan ajratilgan bitta matn sifatida qaytaradi"""
     lines = split_into_lines(text, max_chars=max_chars, max_lines=max_lines)
     return "\n".join(lines)
+
+
+SENTENCE_END_CHARS: Set[str] = {".", "!", "?", "…"}
+CLAUSE_END_CHARS: Set[str] = {",", ";", ":", "—", "-"}
+
+
+def _get_w_prop(w: Any, prop: str, default: Any = None) -> Any:
+    """So'z obyekti yoki lug'atidan xossani xavfsiz o'qish"""
+    if hasattr(w, prop):
+        val = getattr(w, prop)
+        return val if val is not None else default
+    if isinstance(w, dict):
+        val = w.get(prop)
+        return val if val is not None else default
+    return default
+
+
+def chunk_words_by_pause(
+    words: List[Any],
+    max_chars_line: int = 28,
+    max_lines: int = 2,
+    max_words: int = 7,
+    min_chunk_chars: int = 12,
+    pause_threshold: float = 0.35,
+) -> List[List[Any]]:
+    """
+    So'zlarni nutqdagi tabiiy pauzalar, intonatsiya va qat'iy o'lcham bo'yicha bo'laklaydi.
+    Qoidalar:
+    - Majburiy bo'lish: 2 qatorga (max_chars_line * max_lines, masalan 28*2=56) sig'masa yoki max_words (7) dan oshsa
+    - Ixtiyoriy (tabiiy) bo'lish: joriy bo'lak matni >= min_chunk_chars (12) bo'lsa va:
+        oxirgi so'z . ! ? … bilan tugasa; yoki , ; : — - bilan tugasa; yoki keyingi so'zgacha pauza >= pause_threshold (0.35s)
+    - Yetim so'z (orphan merge): oxirgi bo'lak < min_chunk_chars (12) belgi bo'lsa va sig'sa - oldingi bo'lakka qo'shiladi.
+    """
+    if not words:
+        return []
+
+    chunks: List[List[Any]] = []
+    curr_chunk: List[Any] = []
+    max_total_chars = max_chars_line * max_lines
+
+    def chunk_char_len(chunk: List[Any]) -> int:
+        if not chunk:
+            return 0
+        texts = [str(_get_w_prop(w, "word", "") or "") for w in chunk]
+        return len(" ".join(texts))
+
+    for i, w in enumerate(words):
+        w_text = str(_get_w_prop(w, "word", "") or "").strip()
+        w_len = len(w_text)
+
+        if not curr_chunk:
+            curr_chunk.append(w)
+            continue
+
+        proposed_len = chunk_char_len(curr_chunk) + 1 + w_len
+        proposed_word_count = len(curr_chunk) + 1
+
+        # Majburiy bo'lish sharti:
+        forced_split = (proposed_word_count > max_words) or (proposed_len > max_total_chars)
+
+        if forced_split:
+            chunks.append(curr_chunk)
+            curr_chunk = [w]
+            continue
+
+        # Tabiiy bo'lish shartlari:
+        prev_w = curr_chunk[-1]
+        prev_text = str(_get_w_prop(prev_w, "word", "") or "").strip()
+        curr_chars = chunk_char_len(curr_chunk)
+
+        # 1) Tinish belgilari
+        last_char = prev_text[-1] if prev_text else ""
+        has_sentence_end = (last_char in SENTENCE_END_CHARS) or prev_text.endswith("...")
+        has_clause_end = (last_char in CLAUSE_END_CHARS)
+
+        # 2) Pauza tekshiruvi
+        prev_end = float(_get_w_prop(prev_w, "end", 0.0) or 0.0)
+        curr_start = float(_get_w_prop(w, "start", 0.0) or 0.0)
+        pause_sec = curr_start - prev_end
+        has_pause = pause_sec >= pause_threshold
+
+        natural_split = (curr_chars >= min_chunk_chars) and (has_sentence_end or has_clause_end or has_pause)
+
+        if natural_split:
+            chunks.append(curr_chunk)
+            curr_chunk = [w]
+        else:
+            curr_chunk.append(w)
+
+    if curr_chunk:
+        chunks.append(curr_chunk)
+
+    # Yetim so'z (orphan chunk) birlashtirish:
+    if len(chunks) >= 2:
+        last_c = chunks[-1]
+        last_len = chunk_char_len(last_c)
+        if last_len < min_chunk_chars:
+            prev_c = chunks[-2]
+            combined_len = chunk_char_len(prev_c) + 1 + last_len
+            if combined_len <= max_total_chars:
+                chunks[-2] = prev_c + last_c
+                chunks.pop()
+
+    return chunks
 
 
 # ==================== 7. VAQT — KADR ANIQLIGI ====================

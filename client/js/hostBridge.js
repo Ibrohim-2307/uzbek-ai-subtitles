@@ -378,6 +378,35 @@ const HostBridge = {
         const off = parseFloat(timelineOffset) || 0.0;
         const leadIn = (styleOptions && typeof styleOptions.leadIn === "number") ? styleOptions.leadIn : 0.0;
 
+        // 9.1 FPS — joylashdan oldin hostdan qayta o'qiladi
+        let currentFps = (window.UzbekUtils && window.UzbekUtils.getHostFps) ? window.UzbekUtils.getHostFps() : 25.0;
+        try {
+            const seqInfo = await this.getSequenceInfo();
+            if (seqInfo && seqInfo.ok && seqInfo.fps) {
+                const hostFps = parseFloat(seqInfo.fps);
+                if (hostFps && Math.abs(hostFps - currentFps) > 0.01) {
+                    if (window.UzbekUtils && window.UzbekUtils.setHostFps) {
+                        window.UzbekUtils.setHostFps(hostFps);
+                    }
+                    logDebug(`FPS yangilandi: ${currentFps.toFixed(2)} -> ${hostFps.toFixed(2)} (hostdan qayta o'qildi, vaqtlar shu kadrga moslandi)`);
+                    currentFps = hostFps;
+                }
+            }
+        } catch (e) {
+            logDebug("FPS qayta o'qish xatosi: " + (e.message || e));
+        }
+
+        // 9.2 Klip offseti — ikki marta siljishdan himoya
+        if (off !== 0 && segments && segments.length > 0) {
+            const firstSeg = segments[0];
+            const firstWord = (firstSeg.words && firstSeg.words[0]) ? firstSeg.words[0] : null;
+            if (firstWord && typeof firstWord.raw_start === "number") {
+                if (firstWord.start > firstWord.raw_start && Math.abs((firstWord.start - firstWord.raw_start) - off) < 0.1) {
+                    logDebug("IKKI MARTA SILJISH EHTIMOLI: Klip offseti allaqachon qo'shilgan, 'Nudge' maydonini 0.0 qilib qo'ying");
+                }
+            }
+        }
+
         // Har bir segmentning boshlanish va tugash vaqtlarini aniqlash (faqat qo'shimcha qo'lda kiritilgan offset bo'lsagina siljitamiz)
         let timelineSegments = (off !== 0) ? segments.map((seg, idx) => ({
             ...seg,
@@ -419,16 +448,23 @@ const HostBridge = {
                     return words.slice(0, half).join(" ") + "\n" + words.slice(half).join(" ");
                 }
 
-                const full = ws.map(w => w.word).join(" ");
-                if (ws.length <= 4 && full.length <= 28) {
-                    res.push({
-                        ...s,
-                        id: gId++,
-                        start: ws[0].start,
-                        end: ws[ws.length - 1].end,
-                        text: fmt2Lines(full),
-                        words: ws
-                    });
+                if (window.UzbekUtils && window.UzbekUtils.chunkWordsSmart) {
+                    const chunks = window.UzbekUtils.chunkWordsSmart(ws, { maxCharsLine: 28, maxLines: 2, maxWords: 7, minChunkChars: 12, pauseThreshold: 0.35 });
+                    for (let c = 0; c < chunks.length; c++) {
+                        const ch = chunks[c];
+                        const cTxt = ch.map(item => item.word).join(" ");
+                        let cStart = ch[0].start;
+                        let cEnd = ch[ch.length - 1].end;
+                        if (cEnd <= cStart) cEnd = Number((cStart + 0.35).toFixed(3));
+                        res.push({
+                            ...s,
+                            id: gId++,
+                            start: Number(cStart.toFixed(3)),
+                            end: Number(cEnd.toFixed(3)),
+                            text: fmt2Lines(cTxt),
+                            words: ch
+                        });
+                    }
                     continue;
                 }
 
@@ -438,7 +474,9 @@ const HostBridge = {
                 for (let w = 0; w < ws.length; w++) {
                     const wItem = ws[w];
                     const wLen = (wItem.word || "").length;
-                    if (cChunk.length > 0 && (cChunk.length >= 4 || cLen + 1 + wLen > 28)) {
+                    const prevW = cChunk.length > 0 ? cChunk[cChunk.length - 1] : null;
+                    const pause = (prevW && wItem.start && prevW.end) ? (wItem.start - prevW.end) : 0;
+                    if (cChunk.length > 0 && (cChunk.length >= 7 || cLen + 1 + wLen > 56 || pause >= 0.35)) {
                         chunks.push(cChunk);
                         cChunk = [wItem];
                         cLen = wLen;
@@ -470,8 +508,8 @@ const HostBridge = {
 
         if (window.UzbekUtils && window.UzbekUtils.rechunkSegments) {
             timelineSegments = window.UzbekUtils.rechunkSegments(timelineSegments, {
-                fps: window.UzbekUtils.getHostFps(),
-                maxChars: 42,
+                fps: currentFps,
+                maxChars: 28,
                 maxLines: 2,
                 normalize: true
             });

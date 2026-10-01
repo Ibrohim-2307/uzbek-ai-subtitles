@@ -20,7 +20,8 @@ from backend.utils.uzbek_nlp import (
     number_to_uzbek_words, replace_numbers_with_words,
     split_into_lines, split_long_segment,
     snap_to_frame, is_on_frame,
-    format_srt_time, format_frame_time, parse_timecode
+    format_srt_time, format_frame_time, parse_timecode,
+    chunk_words_by_pause
 )
 
 
@@ -252,6 +253,87 @@ class TestUzbekNLP(unittest.TestCase):
         self.assertEqual(parse_timecode("00:00:03.200", 25.0), 3.2)
         self.assertEqual(parse_timecode("03:20", 25.0), 200.0)
         self.assertEqual(parse_timecode("12.5", 25.0), 12.5)
+
+    # ==================== 10. SO'ZLARNI BO'LAKLASH (PAUZA VA TINISH BELGISI) ====================
+    def test_32_chunk_words_by_pause_basic(self):
+        words = [
+            {"word": "Salom", "start": 0.0, "end": 0.4},
+            {"word": "doʻstlar", "start": 0.45, "end": 0.9},
+            {"word": "bugun", "start": 1.4, "end": 1.8},
+            {"word": "yangi", "start": 1.85, "end": 2.2},
+            {"word": "dars", "start": 2.25, "end": 2.6}
+        ]
+        chunks = chunk_words_by_pause(words)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual([w["word"] for w in chunks[0]], ["Salom", "doʻstlar"])
+        self.assertEqual([w["word"] for w in chunks[1]], ["bugun", "yangi", "dars"])
+
+    def test_33_chunk_words_by_punctuation(self):
+        words = [
+            {"word": "Dars", "start": 0.0, "end": 0.3},
+            {"word": "tugadi.", "start": 0.35, "end": 0.8},
+            {"word": "Endi", "start": 0.85, "end": 1.1},
+            {"word": "dam", "start": 1.15, "end": 1.4},
+            {"word": "olamiz", "start": 1.45, "end": 1.8}
+        ]
+        chunks = chunk_words_by_pause(words)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual([w["word"] for w in chunks[0]], ["Dars", "tugadi."])
+        self.assertEqual([w["word"] for w in chunks[1]], ["Endi", "dam", "olamiz"])
+
+    def test_34_chunk_words_by_clause_punctuation(self):
+        words = [
+            {"word": "Birinchidan,", "start": 0.0, "end": 0.7},
+            {"word": "biz", "start": 0.75, "end": 0.95},
+            {"word": "rejani", "start": 1.0, "end": 1.4},
+            {"word": "tuzdik", "start": 1.45, "end": 1.85}
+        ]
+        chunks = chunk_words_by_pause(words)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual([w["word"] for w in chunks[0]], ["Birinchidan,"])
+        self.assertEqual([w["word"] for w in chunks[1]], ["biz", "rejani", "tuzdik"])
+
+    def test_35_chunk_words_by_pause_threshold(self):
+        words = [
+            {"word": "Bu", "start": 0.0, "end": 0.2},
+            {"word": "birinchi", "start": 0.25, "end": 0.7},
+            {"word": "gap", "start": 0.75, "end": 1.0},
+            {"word": "davomi", "start": 1.36, "end": 1.7},
+            {"word": "boshlandi", "start": 1.75, "end": 2.1}
+        ]
+        chunks = chunk_words_by_pause(words, pause_threshold=0.35)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual([w["word"] for w in chunks[0]], ["Bu", "birinchi", "gap"])
+        self.assertEqual([w["word"] for w in chunks[1]], ["davomi", "boshlandi"])
+
+    def test_36_chunk_words_forced_max_words(self):
+        words = [{"word": f"soʻz{i}", "start": float(i) * 0.2, "end": float(i) * 0.2 + 0.18} for i in range(12)]
+        chunks = chunk_words_by_pause(words, max_words=7)
+        self.assertGreater(len(chunks), 1)
+        for c in chunks:
+            self.assertLessEqual(len(c), 7)
+
+    def test_37_chunk_words_forced_max_chars(self):
+        words = [
+            {"word": "juda_uzun_soʻz_1_bir_ikki", "start": 0.0, "end": 0.5},
+            {"word": "juda_uzun_soʻz_2_uch_tort", "start": 0.55, "end": 1.0},
+            {"word": "juda_uzun_soʻz_3_besh_olti", "start": 1.05, "end": 1.5}
+        ]
+        chunks = chunk_words_by_pause(words, max_chars_line=28, max_lines=2)
+        for c in chunks:
+            txt = " ".join([w["word"] for w in c])
+            self.assertLessEqual(len(txt), 56)
+
+    def test_38_chunk_words_orphan_merge(self):
+        words_orphan = [
+            {"word": "Bu", "start": 0.0, "end": 0.2},
+            {"word": "katta", "start": 0.25, "end": 0.5},
+            {"word": "mavzu;", "start": 0.55, "end": 0.8},
+            {"word": "ha", "start": 0.85, "end": 1.0}
+        ]
+        chunks = chunk_words_by_pause(words_orphan)
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual([w["word"] for w in chunks[0]], ["Bu", "katta", "mavzu;", "ha"])
 
 
 if __name__ == "__main__":

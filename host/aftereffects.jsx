@@ -1768,6 +1768,13 @@ function ae_writeWordStackLayers(comp, wordPlan, style, data) {
     }
 
     var fps = comp.frameRate || 25.0;
+    if (data && data.fps) {
+        var incFps = parseFloat(data.fps);
+        if (incFps > 0 && Math.abs(incFps - fps) > 0.01) {
+            // comp.frameRate ustunlik qiladi, vaqtlar komp kadriga yaxlitlanadi
+            fps = comp.frameRate || 25.0;
+        }
+    }
     var compH = comp.height;
     var compW = comp.width;
     var compDisplayOffset = (typeof comp.displayStartTime === "number") ? comp.displayStartTime : 0;

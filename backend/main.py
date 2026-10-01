@@ -26,7 +26,8 @@ from .utils.uzbek_nlp import (
     kirill_to_lotin,
     replace_numbers_with_words,
     apply_custom_dictionary,
-    split_subtitle_text
+    split_subtitle_text,
+    chunk_words_by_pause
 )
 from .utils.beat_detector import detect_tempo_and_beats
 from .utils.audio_aligner import snap_word_timestamps_to_audio
@@ -464,29 +465,21 @@ async def transcribe_audio(
                 global_seg_id += 1
                 continue
 
-            # Aks holda ko'pi bilan 2 qatorga sig'adigan qisqa bo'laklarga ajratamiz
-            chunks = []
-            curr_chunk = []
-            curr_len = 0
-
-            for w in words:
-                w_len = len(w.word)
-                if curr_chunk and (len(curr_chunk) >= 4 or curr_len + 1 + w_len > 28):
-                    chunks.append(curr_chunk)
-                    curr_chunk = [w]
-                    curr_len = w_len
-                else:
-                    curr_chunk.append(w)
-                    curr_len += (1 if curr_chunk else 0) + w_len
-
-            if curr_chunk:
-                chunks.append(curr_chunk)
+            # Nutqdagi tabiiy pauzalar, intonatsiya va tinish belgilari bo'yicha bo'laklaymiz (Blok F: 9.3)
+            chunks = chunk_words_by_pause(
+                words,
+                max_chars_line=28,
+                max_lines=2,
+                max_words=7,
+                min_chunk_chars=12,
+                pause_threshold=0.35
+            )
 
             for c in chunks:
                 if not c:
                     continue
                 c_text = " ".join([w.word for w in c])
-                fmt_c_text = split_subtitle_text(c_text, max_chars=22, max_lines=2)
+                fmt_c_text = split_subtitle_text(c_text, max_chars=28, max_lines=2)
                 c_start = c[0].start
                 c_end = c[-1].end
                 if c_end <= c_start:

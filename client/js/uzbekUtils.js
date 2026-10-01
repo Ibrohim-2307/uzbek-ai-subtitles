@@ -25,6 +25,9 @@ const NOT_AYN_WORDS = new Set([
     "he'll", "she'll", "we'll", "they'll", "o'clock", "ma'am", "y'all"
 ]);
 
+const SENTENCE_END_CHARS = [".", "!", "?", "…"];
+const CLAUSE_END_CHARS = [",", ";", ":", "—", "-"];
+
 const VALID_SUFFIXES = [
     "larimizning", "laringizning",
     "larimizdan", "laringizdan",
@@ -764,11 +767,96 @@ const UzbekUtils = {
         return this.parseTimecode(timeStr, this.getHostFps());
     },
 
-    // ==================== 8. RECHUNK SEGMENTS ====================
+    // ==================== 8. SO'ZLARNI BO'LAKLASH (SMART CHUNKING) ====================
+
+    chunkWordsSmart(words, options = {}) {
+        const maxCharsLine = (options && options.maxCharsLine) || 28;
+        const maxLines = (options && options.maxLines) || 2;
+        const maxWords = (options && options.maxWords) || 7;
+        const minChunkChars = (options && options.minChunkChars) || 12;
+        const pauseThreshold = (options && options.pauseThreshold !== undefined) ? options.pauseThreshold : 0.35;
+        const maxTotalChars = maxCharsLine * maxLines;
+
+        if (!words || words.length === 0) return [];
+
+        function chunkCharLen(chunk) {
+            if (!chunk || chunk.length === 0) return 0;
+            return chunk.map(w => (w.word || "").trim()).join(" ").length;
+        }
+
+        const chunks = [];
+        let currChunk = [];
+
+        for (let i = 0; i < words.length; i++) {
+            const w = words[i];
+            const wText = (w.word || "").trim();
+            const wLen = wText.length;
+
+            if (currChunk.length === 0) {
+                currChunk.push(w);
+                continue;
+            }
+
+            const proposedLen = chunkCharLen(currChunk) + 1 + wLen;
+            const proposedWordCount = currChunk.length + 1;
+
+            const forcedSplit = (proposedWordCount > maxWords) || (proposedLen > maxTotalChars);
+
+            if (forcedSplit) {
+                chunks.push(currChunk);
+                currChunk = [w];
+                continue;
+            }
+
+            const prevW = currChunk[currChunk.length - 1];
+            const prevText = (prevW.word || "").trim();
+            const currChars = chunkCharLen(currChunk);
+
+            const lastChar = prevText.length > 0 ? prevText.slice(-1) : "";
+            const hasSentenceEnd = SENTENCE_END_CHARS.indexOf(lastChar) !== -1 || prevText.endsWith("...");
+            const hasClauseEnd = CLAUSE_END_CHARS.indexOf(lastChar) !== -1;
+
+            const prevEnd = parseFloat(prevW.end) || 0.0;
+            const currStart = parseFloat(w.start) || 0.0;
+            const pauseSec = currStart - prevEnd;
+            const hasPause = pauseSec >= pauseThreshold;
+
+            const naturalSplit = (currChars >= minChunkChars) && (hasSentenceEnd || hasClauseEnd || hasPause);
+
+            if (naturalSplit) {
+                chunks.push(currChunk);
+                currChunk = [w];
+            } else {
+                currChunk.push(w);
+            }
+        }
+
+        if (currChunk.length > 0) {
+            chunks.push(currChunk);
+        }
+
+        // Yetim so'z (orphan merge)
+        if (chunks.length >= 2) {
+            const lastC = chunks[chunks.length - 1];
+            const lastLen = chunkCharLen(lastC);
+            if (lastLen < minChunkChars) {
+                const prevC = chunks[chunks.length - 2];
+                const combinedLen = chunkCharLen(prevC) + 1 + lastLen;
+                if (combinedLen <= maxTotalChars) {
+                    chunks[chunks.length - 2] = prevC.concat(lastC);
+                    chunks.pop();
+                }
+            }
+        }
+
+        return chunks;
+    },
+
+    // ==================== 9. RECHUNK SEGMENTS ====================
 
     rechunkSegments(segments, options = {}) {
         const fps = options.fps || this.getHostFps() || 25.0;
-        const maxChars = options.maxChars || 42;
+        const maxChars = options.maxChars || 28;
         const maxLines = options.maxLines || 2;
         const normalize = options.normalize !== false;
         const oneFrameSec = Number((1.0 / fps).toFixed(6));
@@ -789,30 +877,17 @@ const UzbekUtils = {
                     end: this.snapToFrame(w.end, fps)
                 }));
 
-                const chunks = [];
-                let curChunk = [];
-                let curLen = 0;
-
-                for (let w = 0; w < wordsList.length; w++) {
-                    const wItem = wordsList[w];
-                    const wLen = wItem.word.length;
-                    const testChunkWords = curChunk.concat([wItem]);
-                    const testText = testChunkWords.map(x => x.word).join(" ");
-                    const lines = this.splitIntoLines(testText, maxChars, maxLines);
-
-                    if (curChunk.length > 0 && lines.length > maxLines) {
-                        chunks.push(curChunk);
-                        curChunk = [wItem];
-                        curLen = wLen;
-                    } else {
-                        curChunk.push(wItem);
-                        curLen += (curChunk.length > 1 ? 1 : 0) + wLen;
-                    }
-                }
-                if (curChunk.length > 0) chunks.push(curChunk);
+                const chunks = this.chunkWordsSmart(wordsList, {
+                    maxCharsLine: maxChars,
+                    maxLines: maxLines,
+                    maxWords: 7,
+                    minChunkChars: 12,
+                    pauseThreshold: 0.35
+                });
 
                 for (let c = 0; c < chunks.length; c++) {
                     const ch = chunks[c];
+                    // Word start binding: birinchi so'zning kadrga tushgan vaqtiga qat'iy bog'lash
                     let cStart = this.snapToFrame(ch[0].start, fps);
                     let cEnd = this.snapToFrame(ch[ch.length - 1].end, fps);
                     if (cEnd <= cStart) {
@@ -1183,6 +1258,9 @@ const UzbekUtils = {
             .replace(/'/g, "&#039;");
     }
 };
+
+UzbekUtils.SENTENCE_END_CHARS = SENTENCE_END_CHARS;
+UzbekUtils.CLAUSE_END_CHARS = CLAUSE_END_CHARS;
 
 if (typeof window !== "undefined") {
     window.UzbekUtils = UzbekUtils;
