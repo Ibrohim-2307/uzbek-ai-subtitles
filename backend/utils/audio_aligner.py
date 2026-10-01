@@ -389,7 +389,11 @@ def snap_word_timestamps_to_audio(
     one_to_one_bound = False
     if has_audio and valid_onsets and len(words) == len(valid_onsets) and len(words) >= 2:
         is_monotonic = all(valid_onsets[k] < valid_onsets[k+1] for k in range(len(valid_onsets)-1))
-        within_reach = all(abs(valid_onsets[k] - initial_starts[k]) <= 0.450 for k in range(len(words)))
+        current_starts = [
+            float(getattr(w, "start", 0) if hasattr(w, "start") else w.get("start", 0))
+            for w in words
+        ]
+        within_reach = all(abs(valid_onsets[k] - current_starts[k]) <= 0.450 for k in range(len(words)))
         if is_monotonic and within_reach:
             one_to_one_bound = True
 

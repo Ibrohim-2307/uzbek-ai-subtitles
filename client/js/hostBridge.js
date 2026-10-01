@@ -399,24 +399,31 @@ const HostBridge = {
         // 9.2 Klip offseti — ikki marta siljishdan himoya
         if (off !== 0 && segments && segments.length > 0) {
             const firstSeg = segments[0];
+            const isTimelineTimebase = (firstSeg.timebase === "timeline" || firstSeg.offset_applied === true);
             const firstWord = (firstSeg.words && firstSeg.words[0]) ? firstSeg.words[0] : null;
-            if (firstWord && typeof firstWord.raw_start === "number") {
-                if (firstWord.start > firstWord.raw_start && Math.abs((firstWord.start - firstWord.raw_start) - off) < 0.1) {
-                    logDebug("IKKI MARTA SILJISH EHTIMOLI: Klip offseti allaqachon qo'shilgan, 'Nudge' maydonini 0.0 qilib qo'ying");
-                }
+            const alreadyShifted = firstWord && typeof firstWord.raw_start === "number" &&
+                (firstWord.start > firstWord.raw_start && Math.abs((firstWord.start - firstWord.raw_start) - off) < 0.1);
+
+            if (isTimelineTimebase || alreadyShifted) {
+                logDebug("IKKI MARTA SILJISH TO'XTATILDI: Klip offseti allaqachon qo'shilgan, qayta qo'shish bekor qilindi");
+                off = 0.0;
             }
         }
 
-        // Har bir segmentning boshlanish va tugash vaqtlarini aniqlash (faqat qo'shimcha qo'lda kiritilgan offset bo'lsagina siljitamiz)
+        const snapFn = (window.UzbekUtils && window.UzbekUtils.snapToFrame)
+            ? (t) => window.UzbekUtils.snapToFrame(t, currentFps)
+            : (t) => Number((Math.round(t * currentFps) / currentFps).toFixed(9));
+
+        // Har bir segmentning boshlanish va tugash vaqtlarini aniqlash
         let timelineSegments = (off !== 0) ? segments.map((seg, idx) => ({
             ...seg,
             id: idx + 1,
-            start: Math.max(0, Number((seg.start + off).toFixed(3))),
-            end: Math.max(0.1, Number((seg.end + off).toFixed(3))),
+            start: Math.max(0, snapFn(seg.start + off)),
+            end: Math.max(0.1, snapFn(seg.end + off)),
             words: (seg.words || []).map(w => ({
                 ...w,
-                start: Math.max(0, Number((w.start + off).toFixed(3))),
-                end: Math.max(0.1, Number((w.end + off).toFixed(3)))
+                start: Math.max(0, snapFn(w.start + off)),
+                end: Math.max(0.1, snapFn(w.end + off))
             }))
         })) : segments;
 
