@@ -134,24 +134,23 @@ def detect_pauses_and_onsets(
     offsets: List[float] = []
 
     # Onset kandidatlari
-    for i in range(1, len(diff_e)):
+    for i in range(1, len(energy)):
         t = float(time_axis[i])
+        rise = energy[i] - energy[i - 1]
         # Agar energiya keskin oshsa va sukutdan nutqqa o'tayotgan bo'lsa
-        if diff_e[i] > 0.004 and energy[i] > speech_threshold:
-            if i > 0 and energy[i - 1] <= speech_threshold:
-                onset_t = round(t, 3)
-                onsets.append(onset_t)
-                # Onset attack sakrashi (>=2.5x energiya ko'tarilishi)
-                pre_idx = max(0, i - 2)
-                post_idx = min(len(energy) - 1, i + 2)
-                pre_e = energy[pre_idx] + 1e-6
-                post_e = energy[post_idx]
-                if (post_e / pre_e) >= 2.2:
-                    valid_onsets.append(onset_t)
+        if rise > 0.004 and energy[i] > speech_threshold and energy[i - 1] <= speech_threshold:
+            onset_t = round(t, 3)
+            onsets.append(onset_t)
+            # Onset attack sakrashi (>=2.2x energiya ko'tarilishi)
+            pre_idx = max(0, i - 2)
+            post_idx = min(len(energy) - 1, i + 2)
+            pre_e = energy[pre_idx] + 1e-6
+            post_e = energy[post_idx]
+            if (post_e / pre_e) >= 2.2:
+                valid_onsets.append(onset_t)
         # Offset kandidatlari: nutqdan sukutga o'tish
-        elif diff_e[i] < -0.004 and energy[i] <= speech_threshold:
-            if i > 0 and energy[i - 1] > speech_threshold:
-                offsets.append(round(t, 3))
+        elif rise < -0.004 and energy[i] <= speech_threshold and energy[i - 1] > speech_threshold:
+            offsets.append(round(t, 3))
 
     return {
         "pauses": pauses,
@@ -390,7 +389,8 @@ def snap_word_timestamps_to_audio(
     one_to_one_bound = False
     if has_audio and valid_onsets and len(words) == len(valid_onsets) and len(words) >= 2:
         is_monotonic = all(valid_onsets[k] < valid_onsets[k+1] for k in range(len(valid_onsets)-1))
-        if is_monotonic:
+        within_reach = all(abs(valid_onsets[k] - initial_starts[k]) <= 0.450 for k in range(len(words)))
+        if is_monotonic and within_reach:
             one_to_one_bound = True
 
     for idx, w in enumerate(words):
