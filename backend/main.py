@@ -627,27 +627,35 @@ async def transcribe_audio(
 # ==================== EKSPORT: SRT, VTT, JSON ====================
 
 def seconds_to_srt_time(seconds: float) -> str:
-    """00:00:00,000 formatiga o'tkazish"""
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
+    """00:00:00,000 formatiga o'tkazish (kadr aniqligida yaxlitlash)"""
+    sec_val = float(seconds)
+    total_ms = int(round(sec_val * 1000.0))
+    hrs = total_ms // 3600000
+    total_ms %= 3600000
+    mins = total_ms // 60000
+    total_ms %= 60000
+    secs = total_ms // 1000
+    millis = total_ms % 1000
     return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
 
 
 def seconds_to_vtt_time(seconds: float) -> str:
-    """00:00:00.000 formatiga o'tkazish"""
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
+    """00:00:00.000 formatiga o'tkazish (kadr aniqligida yaxlitlash)"""
+    sec_val = float(seconds)
+    total_ms = int(round(sec_val * 1000.0))
+    hrs = total_ms // 3600000
+    total_ms %= 3600000
+    mins = total_ms // 60000
+    total_ms %= 60000
+    secs = total_ms // 1000
+    millis = total_ms % 1000
     return f"{hrs:02d}:{mins:02d}:{secs:02d}.{millis:03d}"
 
 
 class ExportRequest(BaseModel):
     segments: List[Dict[str, Any]]
     output_path: Optional[str] = None
-    word_mode: Optional[str] = None  # "accumulate", "single", "karaoke", or None
+    word_mode: Optional[str] = None  # "accumulate", "single", "karaoke", "stack", "cascade" or None
     highlight_color: Optional[str] = "#ffe600"
     pause_hide_text: Optional[bool] = False
     pause_hide_threshold_ms: Optional[int] = 800
@@ -665,7 +673,7 @@ def export_srt(payload: ExportRequest):
         words = seg.get("words") or []
         seg_start = float(seg.get("start", 0))
         seg_end = float(seg.get("end", 0))
-        text = seg.get("text", "").strip()
+        text = normalize_uzbek_text(seg.get("text", "")).strip()
 
         # Agar so'zma-so'z rejim yoqilgan bo'lsa va so'zlar mavjud bo'lsa:
         if w_mode == "accumulate" and words:
@@ -684,21 +692,30 @@ def export_srt(payload: ExportRequest):
                 if c_end <= c_start:
                     c_end = c_start + 0.3
 
-                accum_text = " ".join([str(words[k].get("word", "")) for k in range(w_idx + 1)])
+                accum_text = normalize_uzbek_text(" ".join([str(words[k].get("word", "")) for k in range(w_idx + 1)]))
                 lines.append(f"{cue_id}")
                 lines.append(f"{seconds_to_srt_time(c_start)} --> {seconds_to_srt_time(c_end)}")
                 lines.append(accum_text)
                 lines.append("")
                 cue_id += 1
 
-        elif w_mode == "single" and words:
-            # Bitta so'z: Faqat hozir aytilayotgan so'z ko'rinadi
+        elif w_mode in ("single", "stack", "cascade") and words:
+            # Bitta so'z yoki Kaskad: so'z keyingi so'z kelguncha (yoki pauzada) ko'rinadi
             for w_idx, w_item in enumerate(words):
                 c_start = float(w_item.get("start", seg_start))
-                c_end = float(w_item.get("end", c_start + 0.3))
+                w_end = float(w_item.get("end", c_start + 0.3))
+                pause_after = float(w_item.get("pause_after_ms", 0.0))
+                if w_mode in ("stack", "cascade") and (w_idx + 1 < len(words)):
+                    next_start = float(words[w_idx + 1].get("start", w_end))
+                    if payload.pause_hide_text and pause_after >= thresh:
+                        c_end = w_end
+                    else:
+                        c_end = next_start
+                else:
+                    c_end = w_end
                 if c_end <= c_start:
                     c_end = c_start + 0.25
-                w_text = str(w_item.get("word", "")).strip()
+                w_text = normalize_uzbek_text(str(w_item.get("word", ""))).strip()
                 if not w_text:
                     continue
                 lines.append(f"{cue_id}")
@@ -718,7 +735,7 @@ def export_srt(payload: ExportRequest):
 
                 k_parts = []
                 for k in range(len(words)):
-                    kw = str(words[k].get("word", ""))
+                    kw = normalize_uzbek_text(str(words[k].get("word", "")))
                     if k == w_idx:
                         k_parts.append(f'<font color="{h_color}">{kw}</font>')
                     else:
@@ -764,7 +781,7 @@ def export_vtt(payload: ExportRequest):
     for idx, seg in enumerate(payload.segments):
         start_str = seconds_to_vtt_time(float(seg.get("start", 0)))
         end_str = seconds_to_vtt_time(float(seg.get("end", 0)))
-        text = seg.get("text", "").strip()
+        text = normalize_uzbek_text(seg.get("text", "")).strip()
 
         lines.append(f"{idx + 1}")
         lines.append(f"{start_str} --> {end_str}")
@@ -999,6 +1016,7 @@ async def detect_beats_endpoint(
     file_path: Optional[str] = Form(None),
     sensitivity: Optional[float] = Form(0.5),
     mode: Optional[str] = Form("auto"),
+    fps: Optional[float] = Form(25.0),
     in_point: Optional[float] = Form(None),
     out_point: Optional[float] = Form(None),
     duration: Optional[float] = Form(None),
@@ -1041,10 +1059,15 @@ async def detect_beats_endpoint(
             analysis_file = convert_to_16k_mono_wav(actual_input_path, temp_cut.name, start_sec=start_sec, duration_sec=duration_sec)
 
         sens_val = float(sensitivity) if sensitivity is not None else 0.5
+        fps_val = float(fps) if fps is not None else 25.0
+        if fps_val <= 0:
+            fps_val = 25.0
+
         result = detect_tempo_and_beats(
             audio_path=analysis_file,
             sensitivity=sens_val,
-            mode=mode or "auto"
+            mode=mode or "auto",
+            fps=fps_val
         )
         
         # Audio path URL yoki disk path qaytarish (panelda tinglash uchun)

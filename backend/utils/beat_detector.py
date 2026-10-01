@@ -58,12 +58,108 @@ def convert_audio_for_analysis(input_path: str, target_sr: int = 22050) -> str:
         raise RuntimeError(f"FFmpeg orqali audioni tayyorlashda xatolik: {e.stderr}")
 
 
+def estimate_beat_period(beats: List[Dict[str, Any]]) -> Optional[float]:
+    """Zarbalar orasidagi MEDIAN oraliq — BPM oktava katlansa ham to'g'ri."""
+    if len(beats) < 3:
+        return None
+    diffs = sorted([
+        float(beats[i + 1]["time"]) - float(beats[i]["time"])
+        for i in range(len(beats) - 1)
+        if float(beats[i + 1]["time"]) - float(beats[i]["time"]) > 0.05
+    ])
+    return diffs[len(diffs) // 2] if diffs else None
+
+
+def assign_downbeats(beats: List[Dict[str, Any]], period: float, beats_per_bar: int = 4) -> List[Dict[str, Any]]:
+    """
+    1) FAZA: '1-zarba' ustiga tushadigan zarbalar KUCHI yig'indisi eng katta variant.
+    2) O'RIN + MONOTONLIK (zarba tushib qolsa ham bar raqami surilmaydi).
+    """
+    if not beats or not period or period <= 0:
+        return beats
+
+    # 1) FAZA
+    best_phase, best_score = float(beats[0]["time"]), -1.0
+    for cand in beats[:min(len(beats), beats_per_bar * 2)]:
+        phase = float(cand["time"])
+        score = 0.0
+        for b in beats:
+            if int(round((float(b["time"]) - phase) / period)) % beats_per_bar == 0:
+                score += float(b.get("strength", 1.0))
+        if score > best_score:
+            best_score, best_phase = score, phase
+
+    # 2) O'RIN + MONOTONLIK
+    last_pos = None
+    for b in beats:
+        pos = int(round((float(b["time"]) - best_phase) / period))
+        if last_pos is not None and pos <= last_pos:
+            pos = last_pos + 1
+        last_pos = pos
+        b["is_downbeat"] = (pos % beats_per_bar == 0)  # drop ALOHIDA belgi!
+        b["bar_pos"] = pos % beats_per_bar
+        b["bar"] = (pos // beats_per_bar) + 1
+        b["type"] = "drop" if b.get("is_drop") else ("major" if b["is_downbeat"] else "normal")
+
+    return beats
+
+
+def dedupe_beats(beats: List[Dict[str, Any]], fps: Optional[float] = None, min_interval: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Bir kadrga yoki min_interval oralig'iga tushgan zarbalarni birlashtiradi (kuchlirog'i qoladi)."""
+    if not beats:
+        return []
+    f = float(fps) if (fps and fps > 0) else None
+    min_gap = (1.0 / f) if f else (min_interval if (min_interval and min_interval > 0) else 0.02)
+    sorted_beats = sorted(beats, key=lambda b: float(b.get("time", 0.0)))
+    out: List[Dict[str, Any]] = []
+    for b in sorted_beats:
+        t = float(b.get("time", 0.0))
+        st = float(b.get("strength", 1.0))
+        if out and abs(t - float(out[-1].get("time", 0.0))) < (min_gap - 1e-9):
+            if st > float(out[-1].get("strength", 1.0)):
+                out[-1] = b
+            continue
+        out.append(b)
+    return out
+
+
+def snap_beats_to_frame(beats: List[Dict[str, Any]], fps: float = 25.0) -> List[Dict[str, Any]]:
+    """Har bir zarbani eng yaqin kadrga moslaydi (time_raw, frame, time)."""
+    if not fps or fps <= 0:
+        return beats
+    out = []
+    for b in beats:
+        t = float(b.get("time", 0.0))
+        frame = int(round(t * fps))
+        nb = dict(b)
+        nb["time_raw"] = round(t, 6)
+        nb["frame"] = frame
+        nb["time"] = frame / fps  # aynan kadr vaqti, yumaloqlanmaydi!
+        out.append(nb)
+    return out
+
+
+def sec_to_timecode(seconds: float, fps: float = 25.0) -> str:
+    """Non-drop frame vaqt kodi: 00:00:03:05"""
+    nominal = int(round(fps)) or 25
+    total = int(round(max(0.0, seconds) * fps))
+    fr = total % nominal
+    total_sec = (total - fr) // nominal
+    return "%02d:%02d:%02d:%02d" % (
+        total_sec // 3600,
+        (total_sec % 3600) // 60,
+        total_sec % 60,
+        fr
+    )
+
+
 def detect_tempo_and_beats(
     audio_path: str,
     sensitivity: float = 0.5,  # 0.0 (Light) -> 1.0 (Intense)
     mode: str = "auto",        # "auto", "light", "medium", "intense", "drops"
     min_bpm: float = 65.0,
-    max_bpm: float = 185.0
+    max_bpm: float = 185.0,
+    fps: float = 25.0
 ) -> Dict[str, Any]:
     """
     CapCut 'Beats' moduli kabi musiqa ritmini, zarbalarini va kadr o'tish nuqtalarini aniqlaydi.
@@ -73,7 +169,7 @@ def detect_tempo_and_beats(
         # 1. 22050Hz mono WAV ga aylantiramiz
         target_sr = 22050
         temp_wav = convert_audio_for_analysis(audio_path, target_sr=target_sr)
-        
+
         sample_rate, raw_data = scipy.io.wavfile.read(temp_wav)
         if raw_data.ndim > 1:
             data = raw_data.mean(axis=1).astype(np.float32)
@@ -84,15 +180,25 @@ def detect_tempo_and_beats(
         max_val = np.max(np.abs(data))
         if max_val > 0:
             data = data / max_val
-        
+
         total_samples = len(data)
         duration_sec = total_samples / sample_rate
         if duration_sec <= 0.1:
             return {
+                "bpm_raw": 120.0,
                 "bpm": 120.0,
+                "beat_period_sec": 0.5,
                 "duration": 0.0,
+                "beat_count": 0,
+                "downbeat_count": 0,
+                "drop_count": 0,
+                "sensitivity": sensitivity,
+                "mode": mode,
+                "fps": fps,
                 "beats": [],
                 "cut_points": [],
+                "cut_frames": [],
+                "cut_timecodes": [],
                 "waveform": []
             }
 
@@ -118,7 +224,7 @@ def detect_tempo_and_beats(
         # Spektral Oqim (Spectral Flux / Onset Detection Function)
         def spectral_flux(m):
             diff = np.diff(m, axis=1)
-            diff = np.maximum(0, diff) # Faqat energiyaning ko'tarilish lahzasi
+            diff = np.maximum(0, diff)  # Faqat energiyaning ko'tarilish lahzasi
             return np.sum(diff, axis=0)
 
         flux_full = spectral_flux(mag)
@@ -148,31 +254,35 @@ def detect_tempo_and_beats(
         combined_flux = (0.50 * flux_bass_norm) + (0.35 * flux_full_norm) + (0.15 * flux_high_norm)
 
         # 3. Tempo (BPM) ni Avtokorrelyatsiya orqali hisoblash
-        fps = sample_rate / hop_size  # Taxminan 43.06 freym/sek
+        stft_fps = sample_rate / hop_size  # bu STFT freym chastotasi, LOYIHA fps EMAS
         acorr = np.correlate(combined_flux - np.mean(combined_flux), combined_flux - np.mean(combined_flux), mode='full')
-        acorr = acorr[len(acorr)//2:]
+        acorr = acorr[len(acorr) // 2:]
 
-        min_lag = int(fps * 60.0 / max_bpm)
-        max_lag = int(fps * 60.0 / min_bpm)
+        min_lag = int(stft_fps * 60.0 / max_bpm)
+        max_lag = int(stft_fps * 60.0 / min_bpm)
         lag_range = acorr[min_lag:max_lag]
-        
-        bpm = 120.0
-        if len(lag_range) > 0 and np.max(lag_range) > 0:
-            peak_lag = np.argmax(lag_range) + min_lag
-            detected_bpm = (fps * 60.0) / peak_lag
-            # Agar BPM juda past yoki yuqori bo'lsa, oktavasini to'g'irlaymiz
-            while detected_bpm < 75.0:
-                detected_bpm *= 2.0
-            while detected_bpm > 165.0:
-                detected_bpm /= 2.0
-            bpm = round(detected_bpm, 1)
 
-        beat_period_sec = 60.0 / bpm
+        bpm_raw = 120.0
+        if len(lag_range) > 0 and np.max(lag_range) > 0:
+            lags = np.arange(min_lag, max_lag)
+            bpm_candidates = (stft_fps * 60.0) / lags
+            # Standart perceptual prior (120 BPM markazida, oktava va subgarmoniklarni muvozanatlash)
+            prior = np.exp(-0.5 * ((np.log2(bpm_candidates / 120.0)) / 0.8) ** 2)
+            weighted_acorr = lag_range * prior
+            peak_lag = lags[np.argmax(weighted_acorr)]
+            detected_bpm = (stft_fps * 60.0) / peak_lag
+            bpm_raw = round(detected_bpm, 1)
+
+        bpm = bpm_raw
+        while bpm < 75.0:
+            bpm *= 2.0  # faqat KO'RSATISH uchun
+        while bpm > 165.0:
+            bpm /= 2.0
+        bpm = round(bpm, 1)
+
+        beat_period_sec = 60.0 / bpm_raw  # grid haqiqiy davr bo'yicha
 
         # 4. Sezgirlik va Rejimga ko'ra Piklar (Peak picking)
-        # CapCut sezgirligi: Light (1), Normal (2), Dynamic (3), Intense (4), Max (5)
-        # sensitivity parametri: 0.0 (juda yengil) dan 1.0 (o'ta tez/har bir zarba)
-        # Mode bo'yicha parametrlar
         if mode == "light":
             sensitivity = 0.15
         elif mode == "medium":
@@ -183,27 +293,21 @@ def detect_tempo_and_beats(
             sensitivity = 0.05
 
         # Dinamik chegara (Adaptive Moving Average Threshold)
-        win_size = int(fps * 0.4)
+        win_size = int(stft_fps * 0.4)
         if win_size % 2 == 0:
             win_size += 1
         if win_size < 3:
             win_size = 3
-        
+
         kernel = np.ones(win_size) / win_size
         moving_avg = np.convolve(combined_flux, kernel, mode='same')
         moving_std = np.sqrt(np.maximum(0, np.convolve(combined_flux**2, kernel, mode='same') - moving_avg**2))
 
-        # Sezgirlik qanchalik baland bo'lsa, threshold past bo'ladi
-        # sensitivity = 0.0 -> factor = 2.2 (faqat eng kuchli zarbalar)
-        # sensitivity = 1.0 -> factor = 0.2 (deyarli barcha ritmik zarbalar)
         threshold_factor = 2.4 - (sensitivity * 2.1)
         threshold = moving_avg + (threshold_factor * moving_std)
 
-        # Min masofa:
-        # Light rejimda: kamida yarim sekund (0.45s) yoki butun takt
-        # Intense rejimda: 1/8 takt (0.15s)
         min_dist_sec = max(0.12, 0.45 - (sensitivity * 0.32))
-        min_dist_frames = max(2, int(min_dist_sec * fps))
+        min_dist_frames = max(2, int(min_dist_sec * stft_fps))
 
         peaks, properties = scipy.signal.find_peaks(
             combined_flux,
@@ -211,12 +315,16 @@ def detect_tempo_and_beats(
             distance=min_dist_frames
         )
 
-        # 5. Bass Drop va Portlashlarni aniqlash
-        bass_thresh = np.mean(flux_bass_norm) + (2.0 * np.std(flux_bass_norm))
+        # 5. Bass Drop va Portlashlarni aniqlash (qat'iylashtirilgan)
+        bass_median = float(np.median(flux_bass_norm[flux_bass_norm > 0])) if np.any(flux_bass_norm > 0) else 0.0
+        bass_thresh = max(
+            np.mean(flux_bass_norm) + (2.5 * np.std(flux_bass_norm)),
+            bass_median * 1.6
+        )
         drop_peaks, _ = scipy.signal.find_peaks(
             flux_bass_norm,
             height=bass_thresh,
-            distance=int(fps * 1.5)  # Droplar orasi kamida 1.5 sekund
+            distance=int(stft_fps * 1.5)  # Droplar orasi kamida 1.5 sekund
         )
         drop_times_set = set(np.round(onset_times[drop_peaks], 2))
 
@@ -226,9 +334,9 @@ def detect_tempo_and_beats(
             t = float(onset_times[p])
             strength = float(combined_flux[p])
             is_drop = any(abs(t - dt) < 0.15 for dt in drop_times_set)
-            
+
             raw_beats.append({
-                "time": round(t, 3),
+                "time": round(t, 4),
                 "strength": round(strength, 3),
                 "is_drop": is_drop
             })
@@ -239,7 +347,7 @@ def detect_tempo_and_beats(
             cur = first_hit
             while cur < duration_sec:
                 raw_beats.append({
-                    "time": round(cur, 3),
+                    "time": round(cur, 4),
                     "strength": 0.5,
                     "is_drop": False
                 })
@@ -256,22 +364,15 @@ def detect_tempo_and_beats(
                 cleaned_beats.append(b)
                 last_t = b["time"]
 
-        # Taktdagi o'rnini (Downbeat: 1-zarba, Major, Minor) belgilash
-        # CapCut'dagidek har bir taktning 1-zarbasi (Downbeat) oltin rangda ko'rinadi
-        beats_result = []
-        beat_counter = 0
+        # Taktdagi o'rnini (Downbeat: 1-zarba, Major, Minor) faza bo'yicha belgilash
+        measured_period = estimate_beat_period(cleaned_beats) or beat_period_sec
+        cleaned_beats = assign_downbeats(cleaned_beats, measured_period, beats_per_bar=4)
+
         for idx, b in enumerate(cleaned_beats):
-            # Taxminiy 4/4 takt bo'yicha downbeat
-            is_downbeat = (idx % 4 == 0) or b["is_drop"]
-            b_type = "drop" if b["is_drop"] else ("major" if is_downbeat else "normal")
-            beats_result.append({
-                "index": idx + 1,
-                "time": b["time"],
-                "strength": b["strength"],
-                "is_downbeat": is_downbeat,
-                "is_drop": b["is_drop"],
-                "type": b_type
-            })
+            b["index"] = idx + 1
+
+        # Har bir zarbani loyiha kadriga moslash (snap to frame)
+        snapped_beats = snap_beats_to_frame(cleaned_beats, fps=fps)
 
         # 7. Vizual Waveform (UI Canvas chizish uchun 400 ta nuqta)
         waveform_points = []
@@ -282,20 +383,32 @@ def detect_tempo_and_beats(
             if len(chunk) > 0:
                 val = float(np.max(np.abs(chunk)))
                 waveform_points.append(round(val, 3))
-        
+
         waveform_points = waveform_points[:target_points]
 
-        # 8. Kadr o'tish nuqtalari (Cut timestamps)
-        cut_points = [b["time"] for b in beats_result]
+        # 8. Kadr o'tish nuqtalari (Cut timestamps, frames, timecodes)
+        cut_points = [b["time"] for b in snapped_beats]
+        cut_frames = [b.get("frame", int(round(b["time"] * fps))) for b in snapped_beats]
+        cut_timecodes = [sec_to_timecode(b["time"], fps=fps) for b in snapped_beats]
+
+        downbeat_count = sum(1 for b in snapped_beats if b.get("is_downbeat"))
+        drop_count = sum(1 for b in snapped_beats if b.get("is_drop"))
 
         return {
+            "bpm_raw": bpm_raw,
             "bpm": bpm,
+            "beat_period_sec": round(beat_period_sec, 4),
             "duration": round(duration_sec, 2),
-            "beat_count": len(beats_result),
+            "beat_count": len(snapped_beats),
+            "downbeat_count": downbeat_count,
+            "drop_count": drop_count,
             "sensitivity": sensitivity,
             "mode": mode,
-            "beats": beats_result,
+            "fps": fps,
+            "beats": snapped_beats,
             "cut_points": cut_points,
+            "cut_frames": cut_frames,
+            "cut_timecodes": cut_timecodes,
             "waveform": waveform_points
         }
 

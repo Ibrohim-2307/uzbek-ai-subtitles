@@ -1447,6 +1447,74 @@ function ae_setPlayhead(timeSec) {
     }
 }
 
+function ae_getTimeDiagnostics() {
+    try {
+        if (!app.project || !app.project.activeItem || !(app.project.activeItem instanceof CompItem)) {
+            return JSON.stringify({
+                ok: false,
+                success: false,
+                message: "After Effects'da aktiv kompozitsiya ochilmagan"
+            });
+        }
+        var comp = app.project.activeItem;
+        var fps = comp.frameRate || 25.0;
+        var compDurMs = Math.round((comp.duration || 0) * 1000);
+        var selectedLayer = (comp.selectedLayers && comp.selectedLayers.length > 0) ? comp.selectedLayers[0] : null;
+
+        var layerSourceType = "yo'q";
+        var layerInMs = 0;
+        var layerStartMs = 0;
+        var layerDurMs = 0;
+        var layerOutMs = 0;
+        var audioPath = "";
+
+        if (selectedLayer) {
+            if (selectedLayer.source instanceof CompItem) {
+                layerSourceType = "precomp";
+            } else if (selectedLayer.source && selectedLayer.source.mainSource instanceof SolidSource) {
+                layerSourceType = "solid";
+            } else if (selectedLayer.source && selectedLayer.source.mainSource && selectedLayer.source.mainSource.file) {
+                layerSourceType = "footage";
+                audioPath = selectedLayer.source.mainSource.file.fsName;
+            } else if (selectedLayer.source && selectedLayer.source.file) {
+                layerSourceType = "footage";
+                audioPath = selectedLayer.source.file.fsName;
+            } else {
+                layerSourceType = "layer";
+            }
+
+            layerInMs = Math.round((parseFloat(selectedLayer.inPoint) || 0) * 1000);
+            layerStartMs = Math.round((parseFloat(selectedLayer.startTime) || 0) * 1000);
+            layerOutMs = Math.round((parseFloat(selectedLayer.outPoint) || 0) * 1000);
+            layerDurMs = Math.max(0, layerOutMs - layerInMs);
+        }
+
+        var diag = {
+            ok: true,
+            success: true,
+            host: "AEFT",
+            composition: String(comp.name || "Kompozitsiya"),
+            fps: Math.round(fps * 100) / 100,
+            duration: compDurMs,
+            selected_layer: selectedLayer ? String(selectedLayer.name) : "yo'q",
+            layer_source_type: layerSourceType,
+            layer_in_point: layerInMs,
+            layer_start: layerStartMs,
+            layer_duration: layerDurMs,
+            layer_out_point: layerOutMs,
+            playhead_ms: Math.round(comp.time * 1000),
+            audio_source: {
+                path: audioPath ? String(audioPath).replace(/\\/g, "/") : "yo'q",
+                duration: layerDurMs,
+                sample_rate: 16000
+            }
+        };
+        return JSON.stringify(diag);
+    } catch (e) {
+        return JSON.stringify({ ok: false, success: false, error: e.toString() });
+    }
+}
+
 function ae_getSelectedLayerMediaPath() {
     try {
         if (!app.project || !app.project.activeItem || !(app.project.activeItem instanceof CompItem)) {
@@ -1585,6 +1653,214 @@ function ae_getSelectedLayerMediaPath() {
     }
 }
 
+function ae_writeWordStackLayers(comp, wordPlan, style, data) {
+    if (!comp || !wordPlan || !wordPlan.words) {
+        return JSON.stringify({ ok: false, success: false, message: "Kompozitsiya yoki so'z rejasi mavjud emas" });
+    }
+
+    var words = wordPlan.words;
+    if (words.length === 0) {
+        return JSON.stringify({ ok: true, success: true, count: 0, message: "So'zlar yo'q" });
+    }
+
+    var fps = comp.frameRate || 25.0;
+    var compH = comp.height;
+    var compW = comp.width;
+    var compDisplayOffset = (typeof comp.displayStartTime === "number") ? comp.displayStartTime : 0;
+    var clipOffset = (data && typeof data.clipOffset === "number") ? data.clipOffset : 0;
+    var totalOffset = compDisplayOffset + clipOffset;
+
+    var targetLayerOut = compDisplayOffset + comp.duration;
+    var targetLayerIn = compDisplayOffset;
+    try {
+        if (comp.selectedLayers && comp.selectedLayers.length > 0) {
+            var selLayer = comp.selectedLayers[0];
+            if (selLayer.outPoint) targetLayerOut = parseFloat(selLayer.outPoint);
+            if (selLayer.inPoint) targetLayerIn = parseFloat(selLayer.inPoint);
+        }
+    } catch (tlErr) {}
+
+    // Style parametrlarini olish
+    var fontSize = (style && style.fontSize) ? style.fontSize : Math.round(compH * 0.055);
+    var fontName = (style && style.fontName) ? style.fontName : "Arial-BoldMT";
+    var fillRGB = (style && style.fillColor) ? style.fillColor : [1, 1, 1];
+    var strokeRGB = (style && style.strokeColor) ? style.strokeColor : [0, 0, 0];
+    var strokeW = (style && style.strokeWidth !== undefined) ? style.strokeWidth : 3;
+    var posYPercent = (style && style.positionYPercent) ? style.positionYPercent : 85;
+    var animType = (style && style.wordAnimation) ? String(style.wordAnimation).toLowerCase() : ((style && style.animType) ? String(style.animType).toLowerCase() : "pop");
+
+    var posX = compW / 2;
+    var basePosY = (compH * posYPercent) / 100;
+    var lineSpacing = fontSize * 1.35;
+    var maxY = compH * 0.96;
+
+    // Andoza qatlam yaratib, stili olinadi va o'chiriladi
+    try {
+        var tmpl = comp.layers.addText("TEMPLATE");
+        var tmplProp = tmpl.property("Source Text");
+        var tmplDoc = tmplProp.value;
+        tmplDoc.fontSize = fontSize;
+        try {
+            tmplDoc.font = fontName;
+        } catch (fErr) {
+            try { tmplDoc.font = "ArialMT"; } catch (fErr2) {}
+        }
+        tmplDoc.fillColor = fillRGB;
+        tmplDoc.applyFill = true;
+        if (strokeW > 0) {
+            tmplDoc.applyStroke = true;
+            tmplDoc.strokeColor = strokeRGB;
+            tmplDoc.strokeWidth = strokeW;
+            tmplDoc.strokeOverFill = false;
+        } else {
+            tmplDoc.applyStroke = false;
+        }
+        tmplDoc.justification = ParagraphJustification.CENTER_JUSTIFY;
+        tmplProp.setValue(tmplDoc);
+        tmpl.remove();
+    } catch (tmplErr) {}
+
+    var createdCount = 0;
+
+    for (var i = 0; i < words.length; i++) {
+        var item = words[i];
+        if (!item || !item.word) continue;
+
+        // Kadr aniqligida kompozitsiya vaqti (hech qachon kechikmaslik uchun floor)
+        var wIn = Math.floor(item.inPoint * fps + 0.000001) / fps + totalOffset;
+        var wOut = Math.ceil(item.outPoint * fps - 0.000001) / fps + totalOffset;
+        var cClose = Math.floor(item.closeStart * fps + 0.000001) / fps + totalOffset;
+        var wEnd = Math.round(item.wordEnd * fps) / fps + totalOffset;
+
+        // Clamping kompozitsiya chegaralariga
+        if (wIn >= targetLayerOut) continue;
+        if (wOut > targetLayerOut) wOut = targetLayerOut;
+        if (wIn < targetLayerIn) wIn = targetLayerIn;
+        if (wOut <= wIn) continue;
+
+        var wordLayer = comp.layers.addText(item.word);
+        wordLayer.comment = "UZ_AI_SUBTITLE";
+        wordLayer.name = "[UZ_WORD] " + item.word;
+
+        wordLayer.startTime = wIn;
+        wordLayer.inPoint = wIn;
+        wordLayer.outPoint = wOut;
+
+        // Text Document qo'llash
+        try {
+            var textProp = wordLayer.property("Source Text");
+            var textDoc = textProp.value;
+            textDoc.fontSize = fontSize;
+            try { textDoc.font = fontName; } catch (eF) { try { textDoc.font = "ArialMT"; } catch (eF2) {} }
+            textDoc.fillColor = fillRGB;
+            textDoc.applyFill = true;
+            if (strokeW > 0) {
+                textDoc.applyStroke = true;
+                textDoc.strokeColor = strokeRGB;
+                textDoc.strokeWidth = strokeW;
+                textDoc.strokeOverFill = false;
+            } else {
+                textDoc.applyStroke = false;
+            }
+            textDoc.justification = ParagraphJustification.CENTER_JUSTIFY;
+            textProp.setValue(textDoc);
+        } catch (tDocErr) {}
+
+        // Boshlang'ich pozitsiya
+        var curLine = item.initialLine || 0;
+        var curY = basePosY + (curLine * lineSpacing);
+        if (curY > maxY) curY = maxY;
+
+        var posProp = wordLayer.property("Position");
+        if (posProp) {
+            posProp.setValue([posX, curY]);
+
+            // Agar qator almashinuvi (lineChanges) bo'lsa -> Position kalitlari
+            if (item.lineChanges && item.lineChanges.length > 0) {
+                for (var cIdx = 0; cIdx < item.lineChanges.length; cIdx++) {
+                    var chg = item.lineChanges[cIdx];
+                    var chgTime = Math.floor(chg.time * fps + 0.000001) / fps + totalOffset;
+                    var fromY = basePosY + (chg.fromLine * lineSpacing);
+                    var toY = basePosY + (chg.toLine * lineSpacing);
+                    if (fromY > maxY) fromY = maxY;
+                    if (toY > maxY) toY = maxY;
+
+                    if (chgTime > wIn && chgTime < wOut) {
+                        var animLead = Math.max(0.04, 2 / fps);
+                        posProp.setValueAtTime(chgTime - animLead, [posX, fromY]);
+                        posProp.setValueAtTime(chgTime, [posX, toY]);
+                    }
+                }
+            }
+        }
+
+        // Animatsiya: Pop, Fade yoki None
+        var scaleProp = wordLayer.property("Scale");
+        var opacityProp = wordLayer.property("Opacity");
+
+        if (animType === "pop" && scaleProp) {
+            var p1 = wIn;
+            var p2 = wIn + (2 / fps);
+            var p3 = wIn + (4 / fps);
+            if (p3 < wOut) {
+                scaleProp.setValueAtTime(p1, [88, 88]);
+                scaleProp.setValueAtTime(p2, [112, 112]);
+                scaleProp.setValueAtTime(p3, [100, 100]);
+            }
+        } else if (animType === "fade" && opacityProp) {
+            var fEnd = wIn + (3 / fps);
+            if (fEnd < wOut) {
+                opacityProp.setValueAtTime(wIn, 0);
+                opacityProp.setValueAtTime(fEnd, 100);
+            }
+        }
+
+        // Yopilish animatsiyasi (closeStart dan outPoint gacha)
+        if (cClose < wOut && cClose >= wIn) {
+            if (opacityProp) {
+                opacityProp.setValueAtTime(cClose, 100);
+                opacityProp.setValueAtTime(wOut, 0);
+            }
+            if (animType === "pop" && scaleProp) {
+                scaleProp.setValueAtTime(cClose, [100, 100]);
+                scaleProp.setValueAtTime(wOut, [92, 92]);
+            }
+        }
+
+        // Harf-harf ochilish (charReveal)
+        if (item.charReveal && wEnd > wIn) {
+            try {
+                var textGroup = wordLayer.property("Text");
+                var textAnimators = textGroup.property("Animators") || textGroup.property("ADBE Text Animators");
+                if (textAnimators) {
+                    var anim = textAnimators.addProperty("ADBE Text Animator");
+                    anim.name = "CharReveal";
+                    var animProps = anim.property("ADBE Text Animator Properties");
+                    var opProp = animProps.addProperty("ADBE Text Opacity");
+                    opProp.setValue(0);
+                    var sel = anim.property("ADBE Text Selectors").addProperty("ADBE Text Selector");
+                    var startProp = sel.property("ADBE Text Percent Start");
+                    startProp.setValueAtTime(wIn, 0);
+                    startProp.setValueAtTime(wEnd, 100);
+                }
+            } catch (crErr) {}
+        }
+
+        // MUHIM QOIDA: Hech qachon textDoc.text = "" kaliti qo'yilmaydi!
+        // Shunda pauzada matn o'z holida qotib turadi.
+
+        createdCount++;
+    }
+
+    return JSON.stringify({
+        ok: true,
+        success: true,
+        count: createdCount,
+        stats: wordPlan.stats || {},
+        message: createdCount + " ta so'z kaskad qatlamlari joylandi"
+    });
+}
+
 function ae_createSubtitles(payloadJson) {
     try {
         if (!app.project || !app.project.activeItem || !(app.project.activeItem instanceof CompItem)) {
@@ -1622,6 +1898,13 @@ function ae_createSubtitles(payloadJson) {
                 }
             }
 
+            // Agar so'zma-so'z Kaskad rejasidagi wordPlan berilgan bo'lsa -> alohida qatlamlar yaratish
+            if (data.wordPlan && data.wordPlan.words && data.wordPlan.words.length > 0) {
+                var stackRes = ae_writeWordStackLayers(comp, data.wordPlan, style, data);
+                app.endUndoGroup();
+                return stackRes;
+            }
+
             var createdLayers = [];
             var compW = comp.width;
             var compH = comp.height;
@@ -1643,16 +1926,21 @@ function ae_createSubtitles(payloadJson) {
             var posY = (compH * posYPercent) / 100;
             var posX = compW / 2;
 
+            var compEnd = compDisplayOffset + comp.duration;
+            var targetLayerOut = compEnd;
+            var targetLayerIn = compDisplayOffset;
+            try {
+                if (comp.selectedLayers && comp.selectedLayers.length > 0) {
+                    var selLayer = comp.selectedLayers[0];
+                    if (selLayer.outPoint) targetLayerOut = parseFloat(selLayer.outPoint);
+                    if (selLayer.inPoint) targetLayerIn = parseFloat(selLayer.inPoint);
+                }
+            } catch (tlErr) {}
+
             for (var i = 0; i < segments.length; i++) {
                 var seg = segments[i];
                 var segText = seg.text || "";
                 if (!segText.replace(/\s/g, "")) continue;
-
-                var textLayer = comp.layers.addText(segText);
-                textLayer.comment = "UZ_AI_SUBTITLE";
-                var animTag = seg.styleName || (seg.animType ? seg.animType.toUpperCase() : (style.animType ? style.animType.toUpperCase() : "POP"));
-                var shortText = segText.length > 22 ? (segText.substring(0, 20) + "...") : segText;
-                textLayer.name = "[" + animTag + "] " + shortText;
 
                 var sStart = parseFloat(seg.start) + compDisplayOffset;
                 var sEnd = parseFloat(seg.end) + compDisplayOffset;
@@ -1664,8 +1952,20 @@ function ae_createSubtitles(payloadJson) {
                 }
                 if (sEnd <= sStart) sEnd = sStart + 0.35;
 
-                // Animatsiya lead-in vaqtini hisobga olish
-                var animIn = Math.max(compDisplayOffset, sStart - leadInSec);
+                // CLAMPING: Agar so'z/segment video tugash chegarasidan keyin bo'lsa -> o'tkazib yuborish
+                if (sStart >= targetLayerOut) continue;
+                if (sEnd > targetLayerOut) sEnd = targetLayerOut;
+                if (sStart < targetLayerIn) sStart = targetLayerIn;
+                if (sEnd <= sStart) continue;
+
+                var animIn = Math.max(targetLayerIn, sStart - leadInSec);
+                if (animIn >= sEnd) animIn = sStart;
+
+                var textLayer = comp.layers.addText(segText);
+                textLayer.comment = "UZ_AI_SUBTITLE";
+                var animTag = seg.styleName || (seg.animType ? seg.animType.toUpperCase() : (style.animType ? style.animType.toUpperCase() : "POP"));
+                var shortText = segText.length > 22 ? (segText.substring(0, 20) + "...") : segText;
+                textLayer.name = "[" + animTag + "] " + shortText;
 
                 textLayer.startTime = animIn;
                 textLayer.inPoint = animIn;
@@ -1698,8 +1998,95 @@ function ae_createSubtitles(payloadJson) {
 
                 textLayer.property("Transform").property("Position").setValue([posX, posY]);
 
-                // Karaoke highlight animatori (so'zma-so'z rang va kattalashish)
-                if (isKaraoke && seg.words && seg.words.length > 0) {
+                // SO'ZMA-SO'Z REJIMI (WORD-BY-WORD):
+                var isWordByWord = (style && style.wordByWord);
+                var wordMode = (style && style.wordMode) || "accumulate";
+                var wordAnim = (style && style.wordAnimation) || "pop";
+                var pauseHideText = !!(style && style.pauseHideText);
+                var pauseThresholdSec = ((style && style.pauseHideThresholdMs) ? style.pauseHideThresholdMs : 800) / 1000.0;
+                var charReveal = !!(style && style.charReveal);
+
+                if (isWordByWord && seg.words && seg.words.length > 0) {
+                    if (wordMode === "accumulate") {
+                        // To'planib borsin: har bir so'z aytilganda qatorga qo'shiladi
+                        for (var wIdx = 0; wIdx < seg.words.length; wIdx++) {
+                            var wObj = seg.words[wIdx];
+                            var wTime = Math.max(textLayer.inPoint, parseFloat(wObj.start) + compDisplayOffset);
+                            var wEndTime = Math.max(wTime + 0.1, parseFloat(wObj.end) + compDisplayOffset);
+                            var pauseAfter = (typeof wObj.pause_after_ms === "number") ? (wObj.pause_after_ms / 1000.0) : 0.0;
+
+                            var subWords = [];
+                            for (var k = 0; k < wIdx; k++) {
+                                subWords.push(seg.words[k].word);
+                            }
+                            var prefix = subWords.join(" ");
+                            var currentWordText = wObj.word;
+
+                            if (charReveal && currentWordText.length > 1 && (wEndTime - wTime) >= 0.15) {
+                                // Harf-harf ochilish: so'z davomiyligi bo'yicha harflar bosqichma-bosqich chiqadi
+                                var cLen = currentWordText.length;
+                                var cStep = (wEndTime - wTime) / cLen;
+                                for (var ch = 1; ch <= cLen; ch++) {
+                                    var sliceText = (prefix ? (prefix + " ") : "") + currentWordText.substring(0, ch);
+                                    textDoc.text = sliceText;
+                                    textProp.setValueAtTime(wTime + (ch - 1) * cStep, textDoc);
+                                }
+                            } else {
+                                textDoc.text = (prefix ? (prefix + " ") : "") + currentWordText;
+                                textProp.setValueAtTime(wTime, textDoc);
+                            }
+
+                            // Pauzada matnni yashirish (agar yoqilgan bo'lsa va pauza chegaradan katta bo'lsa)
+                            if (pauseHideText && pauseAfter >= pauseThresholdSec) {
+                                textDoc.text = "";
+                                textProp.setValueAtTime(wEndTime, textDoc);
+                            }
+                        }
+                    } else if (wordMode === "single") {
+                        // Bitta so'z: faqat aytilayotgan so'z ko'rinadi
+                        for (var sIdx = 0; sIdx < seg.words.length; sIdx++) {
+                            var swObj = seg.words[sIdx];
+                            var swTime = Math.max(textLayer.inPoint, parseFloat(swObj.start) + compDisplayOffset);
+                            var swEndTime = Math.max(swTime + 0.1, parseFloat(swObj.end) + compDisplayOffset);
+                            var swPauseAfter = (typeof swObj.pause_after_ms === "number") ? (swObj.pause_after_ms / 1000.0) : 0.0;
+                            var sWordText = swObj.word;
+
+                            if (charReveal && sWordText.length > 1 && (swEndTime - swTime) >= 0.15) {
+                                var sLen = sWordText.length;
+                                var sStep = (swEndTime - swTime) / sLen;
+                                for (var sch = 1; sch <= sLen; sch++) {
+                                    textDoc.text = sWordText.substring(0, sch);
+                                    textProp.setValueAtTime(swTime + (sch - 1) * sStep, textDoc);
+                                }
+                            } else {
+                                textDoc.text = sWordText;
+                                textProp.setValueAtTime(swTime, textDoc);
+                            }
+
+                            // Pauzada matnni yashirish
+                            if (pauseHideText && swPauseAfter >= pauseThresholdSec) {
+                                textDoc.text = "";
+                                textProp.setValueAtTime(swEndTime, textDoc);
+                            }
+                        }
+                    }
+
+                    // Har bir so'z aytilganda mikro-animatsiya (pop / fade)
+                    if (wordAnim === "pop") {
+                        try {
+                            var tScale = textLayer.property("Transform").property("Scale");
+                            for (var pIdx = 0; pIdx < seg.words.length; pIdx++) {
+                                var pwTime = Math.max(textLayer.inPoint, parseFloat(seg.words[pIdx].start) + compDisplayOffset);
+                                tScale.setValueAtTime(pwTime, [90, 90, 100]);
+                                tScale.setValueAtTime(pwTime + 0.08, [110, 110, 100]);
+                                tScale.setValueAtTime(pwTime + 0.16, [100, 100, 100]);
+                            }
+                        } catch (popWErr) {}
+                    }
+                }
+
+                // Karaoke highlight animatori (so'zma-so'z rang va ajralish)
+                if ((isKaraoke || wordMode === "karaoke") && seg.words && seg.words.length > 0) {
                     try {
                         var animators = textLayer.property("Text").property("Animators");
                         var animator = animators.addProperty("ADBE Text Animator");
@@ -2028,16 +2415,28 @@ function ppro_createBeatMarkers(payloadJson) {
         }
 
         var beats = data.beats || [];
+        var fps = parseFloat(data.fps) || 25;
+        try { if (seq.framerate) { var seqFpsM = parseFloat(seq.framerate); if (seqFpsM > 0) fps = seqFpsM; } } catch (eFps) {}
+        if (!(fps > 0)) fps = 25;
+        var frameDur = 1.0 / fps;
+        var lastFrame = -1;
         var count = 0;
+        var skipped = 0;
+
         for (var i = 0; i < beats.length; i++) {
             var b = beats[i];
-            var t = parseFloat(b.time);
-            if (isNaN(t) || t < 0) continue;
+            var tSec = parseFloat(b.time);
+            if (isNaN(tSec) || tSec < 0) continue;
+            var frameNo = (b.frame !== undefined && b.frame !== null)
+                            ? Math.round(parseFloat(b.frame)) : Math.round(tSec * fps);
+            tSec = frameNo * frameDur;
+            if (frameNo === lastFrame) { skipped++; continue; }
+            lastFrame = frameNo;
 
-            var marker = markers.createMarker(t);
+            var marker = markers.createMarker(tSec);
             if (marker) {
-                marker.name = b.is_drop ? "🔥 DROP (Kadr Almashish)" : (b.is_downbeat ? "⭐ Asosiy Beat " + (b.index || i+1) : "Beat " + (b.index || i+1));
-                marker.comments = "CapCut Match Cut | BPM: " + (data.bpm || "");
+                marker.name = b.is_drop ? "DROP" : (b.is_downbeat ? "BEAT" : "Beat " + (b.index || i + 1));
+                marker.comments = "CapCut Match Cut | BPM: " + (data.bpm || "") + " | kadr " + frameNo;
                 if (b.is_drop) {
                     marker.setColorByIndex(1); // Red
                 } else if (b.is_downbeat) {
@@ -2045,7 +2444,7 @@ function ppro_createBeatMarkers(payloadJson) {
                 } else {
                     marker.setColorByIndex(7); // Cyan
                 }
-                marker.end = t;
+                marker.end = tSec + frameDur; // 1 kadr
                 count++;
             }
         }
@@ -2053,11 +2452,18 @@ function ppro_createBeatMarkers(payloadJson) {
         return JSON.stringify({
             success: true,
             count: count,
+            skipped: skipped,
             message: count + " ta CapCut ritm markerlari Sequence timeline'iga muvaffaqiyatli joylashtirildi!"
         });
     } catch (e) {
         return JSON.stringify({ success: false, message: "Marker qo'yishda xatolik: " + e.toString() });
     }
+}
+
+function uzPad2(n) {
+    var s = String(Math.floor(Math.abs(n)));
+    while (s.length < 2) { s = "0" + s; }
+    return s;
 }
 
 /**
@@ -2091,13 +2497,26 @@ function ppro_autoCutAtBeats(payloadJson) {
             var targetTrackIdx = data.trackIndex !== undefined ? data.trackIndex : 0;
             var qeTrack = qeSeq.getVideoTrackAt(targetTrackIdx);
             if (qeTrack) {
+                var fpsCut = parseFloat(data.fps) || 25;
+                try { if (seq.framerate) { var seqFpsC = parseFloat(seq.framerate); if (seqFpsC > 0) fpsCut = seqFpsC; } } catch (eFC) {}
+                if (!(fpsCut > 0)) fpsCut = 25;
+                var nominalCut = Math.round(fpsCut) || 25;
+                var lastCutFrame = -1;
+
                 for (var i = 0; i < beats.length; i++) {
                     var tSec = parseFloat(beats[i].time);
-                    if (isNaN(tSec) || tSec <= 0.05) continue;
+                    if (isNaN(tSec)) continue;
+                    var totalFrames = Math.round(tSec * fpsCut);
+                    if (totalFrames <= 1) continue;              // eng boshidan kesmaymiz
+                    if (totalFrames === lastCutFrame) continue;  // bir kadrda ikki marta kesmaymiz
+                    lastCutFrame = totalFrames;
+                    tSec = totalFrames / fpsCut;
                     try {
-                        var timeObj = new Time();
-                        timeObj.seconds = tSec;
-                        var tc = timeObj.getFormatted(seq.getSettings().videoFrameRate, seq.videoDisplayFormat);
+                        var frPart = totalFrames % nominalCut;
+                        var totalSec = (totalFrames - frPart) / nominalCut;
+                        var tc = uzPad2(Math.floor(totalSec / 3600)) + ":" +
+                                 uzPad2(Math.floor((totalSec % 3600) / 60)) + ":" +
+                                 uzPad2(totalSec % 60) + ":" + uzPad2(frPart);
                         qeTrack.razor(tc);
                         cutCount++;
                     } catch (rErr) {
@@ -2147,17 +2566,28 @@ function ae_createBeatMarkers(payloadJson) {
         }
 
         var beats = data.beats || [];
+        var fps = parseFloat(data.fps) || comp.frameRate || 25;
+        if (!(fps > 0)) fps = 25;
+        var frameDur = 1.0 / fps;
+        var lastFrame = -1;
+        var skipped = 0;
         var count = 0;
 
         for (var i = 0; i < beats.length; i++) {
             var b = beats[i];
             var tSec = parseFloat(b.time);
             if (isNaN(tSec) || tSec < 0) continue;
+            var frameNo = (b.frame !== undefined && b.frame !== null)
+                            ? Math.round(parseFloat(b.frame)) : Math.round(tSec * fps);
+            tSec = frameNo * frameDur;
+            if (frameNo === lastFrame) { skipped++; continue; }   // bir kadrda 2 marker bo'lmasin
+            if (tSec > comp.duration) { skipped++; continue; }    // komp tashqarisi
+            lastFrame = frameNo;
 
             try {
-                var mv = new MarkerValue(b.is_drop ? "🔥 DROP" : (b.is_downbeat ? "⭐ BEAT" : "Beat " + (b.index || i+1)));
-                mv.comment = "CapCut Match Cut | BPM: " + (data.bpm || "");
-                mv.duration = 0.05;
+                var mv = new MarkerValue(b.is_drop ? "DROP" : (b.is_downbeat ? "BEAT" : "Beat " + (b.index || i + 1)));
+                mv.comment = "CapCut Match Cut | BPM: " + (data.bpm || "") + " | kadr " + frameNo;
+                mv.duration = frameDur;                                // 1 kadr (0.05 emas!)
                 comp.markerProperty.setValueAtTime(tSec, mv);
                 count++;
             } catch (mErr) {}
@@ -2166,6 +2596,7 @@ function ae_createBeatMarkers(payloadJson) {
         return JSON.stringify({
             success: true,
             count: count,
+            skipped: skipped,
             message: count + " ta CapCut ritm markerlari AE kompozitsiyasiga joylashtirildi!"
         });
     } catch (e) {
@@ -2190,10 +2621,12 @@ if (typeof $ !== "undefined" && $.global) {
     $.global.ae_getCompInfo = ae_getCompInfo;
     $.global.ae_setPlayhead = ae_setPlayhead;
     $.global.ae_getSelectedLayerMediaPath = ae_getSelectedLayerMediaPath;
+    $.global.ae_writeWordStackLayers = ae_writeWordStackLayers;
     $.global.ae_createSubtitles = ae_createSubtitles;
     $.global.ae_extractSelectedTextStyle = ae_extractSelectedTextStyle;
     $.global.ae_applyStyleToLayers = ae_applyStyleToLayers;
     $.global.ae_createBeatMarkers = ae_createBeatMarkers;
     $.global.ppro_getTimeDiagnostics = ppro_getTimeDiagnostics;
+    $.global.ae_getTimeDiagnostics = ae_getTimeDiagnostics;
 }
 

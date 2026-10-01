@@ -19,6 +19,12 @@ const BeatManager = {
     currentTime: 0,
     sensitivity: 0.5,      // 0.0 (Light) dan 1.0 (Intense) gacha
     mode: "auto",          // "auto", "light", "medium", "intense", "drops"
+    fps: 25,
+    clipStart: 0,
+    clipInPoint: 0,
+    clipOutPoint: 0,
+    clipSpeed: 1.0,
+    clipName: "",
     metronomeEnabled: false,
     canvas: null,
     ctx: null,
@@ -208,10 +214,22 @@ const BeatManager = {
             const res = await window.HostBridge.getSelectedClip();
             if (res && res.success && res.path) {
                 this.mediaPath = res.path;
+                this.clipStart    = parseFloat(res.start) || 0;
+                this.clipInPoint  = parseFloat(res.inPoint) || 0;
+                this.clipOutPoint = parseFloat(res.outPoint) || 0;
+                this.clipSpeed    = (parseFloat(res.speed) > 0) ? parseFloat(res.speed) : 1.0;
+                this.clipName     = res.name || "";
+
+                const seqInfo = await window.HostBridge.getSequenceInfo();
+                if (seqInfo && (seqInfo.fps || seqInfo.frameRate)) {
+                    this.fps = parseFloat(seqInfo.fps || seqInfo.frameRate) || this.fps;
+                }
+                if (window.UzbekUtils) window.UzbekUtils.setHostFps(this.fps);
+
                 const pathInput = document.getElementById("beatSourceInput");
                 if (pathInput) pathInput.value = res.name || res.path;
                 if (statusEl) {
-                    statusEl.innerHTML = `<span style="color: #4ade80;">✓ Tanlandi: ${res.name || "Klip"} (${res.duration ? res.duration.toFixed(1) + "s" : ""})</span>`;
+                    statusEl.innerHTML = `<span style="color: #4ade80;">✓ Tanlandi: ${res.name || "Klip"} (${res.duration ? res.duration.toFixed(1) + "s" : ""}, ${this.fps} fps)</span>`;
                 }
 
                 // Audio pleerni yuklash
@@ -274,7 +292,8 @@ const BeatManager = {
             const options = {
                 filePath: this.mediaPath,
                 sensitivity: this.sensitivity,
-                mode: this.mode
+                mode: this.mode,
+                fps: this.fps || 25
             };
 
             const data = await window.SubtitleAPI.detectBeats(options);
@@ -301,7 +320,8 @@ const BeatManager = {
             const data = await window.SubtitleAPI.detectBeats({
                 file: file,
                 sensitivity: this.sensitivity,
-                mode: this.mode
+                mode: this.mode,
+                fps: this.fps || 25
             });
             this.applyBeatResults(data);
             if (progressBox) progressBox.style.display = "none";
@@ -317,7 +337,11 @@ const BeatManager = {
     applyBeatResults(data) {
         this.bpm = data.bpm || 120;
         this.duration = data.duration || (this.audioElement ? this.audioElement.duration : 10);
-        this.beats = data.beats || [];
+        if (data.fps) this.fps = parseFloat(data.fps) || this.fps;
+
+        const rawList = data.beats || [];
+        const snapped = window.UzbekUtils ? window.UzbekUtils.snapBeats(rawList, this.fps) : rawList;
+        this.beats = window.UzbekUtils ? window.UzbekUtils.dedupeBeats(snapped, this.fps) : snapped;
         this.waveformPoints = data.waveform || [];
 
         // Agar to'lqin nuqtalari bo'lmasa, sintez qilingan to'lqin yaratamiz
@@ -334,6 +358,32 @@ const BeatManager = {
 
         const progressBox = document.getElementById("beatProgressContainer");
         if (progressBox) progressBox.style.display = "none";
+    },
+
+    clipInfo() {
+        return {
+            start: this.clipStart || 0,
+            inPoint: this.clipInPoint || 0,
+            speed: this.clipSpeed || 1,
+            fps: this.fps || 25
+        };
+    },
+
+    beatsForTimeline() {
+        const clip = this.clipInfo();
+        const list = this.activeBeats || [];
+        if (!window.UzbekUtils) return list;
+        const tol = window.UzbekUtils.beatTolerance(clip.fps, 1);
+        const inPoint = clip.inPoint || 0, outPoint = this.clipOutPoint || 0;
+        const kept = list.filter(b => {
+            const t = parseFloat(b.time) || 0;
+            if (t < inPoint - tol) return false;                  // qirqilgan bosh
+            if (outPoint > 0 && t > outPoint + tol) return false;  // qirqilgan oxir
+            return true;
+        });
+        const mapped = window.UzbekUtils.beatsToTimeline(kept, clip);
+        mapped.forEach((b, i) => { b.index = i + 1; });
+        return mapped;
     },
 
     /**
@@ -520,7 +570,7 @@ const BeatManager = {
         const btn = document.getElementById("btnBeatAddRemove");
         if (!btn) return;
 
-        const isNear = this.findBeatNearTime(this.currentTime, 0.12);
+        const isNear = this.findBeatNearTime(this.currentTime);
         if (isNear !== -1) {
             btn.innerHTML = `<span>🗑️ Beatni o‘chirish</span>`;
             btn.style.color = "#f87171";
@@ -532,15 +582,18 @@ const BeatManager = {
         }
     },
 
-    findBeatNearTime(timeSec, tolerance = 0.12) {
-        return this.activeBeats.findIndex(b => Math.abs(b.time - timeSec) <= tolerance);
+    findBeatNearTime(timeSec, tolerance = null) {
+        const tol = (tolerance !== null && tolerance !== undefined)
+            ? tolerance
+            : (window.UzbekUtils ? window.UzbekUtils.beatTolerance(this.fps, 2) : 0.08);
+        return this.activeBeats.findIndex(b => Math.abs(b.time - timeSec) <= tol);
     },
 
     /**
      * Kursor turgan joyga yangi Beat qo'shish yoki mavjudini o'chirish (CapCut kabi)
      */
     toggleBeatAtCurrentTime() {
-        const existingIdx = this.findBeatNearTime(this.currentTime, 0.15);
+        const existingIdx = this.findBeatNearTime(this.currentTime);
         if (existingIdx !== -1) {
             // O'chirish
             const removed = this.activeBeats.splice(existingIdx, 1);
@@ -548,9 +601,11 @@ const BeatManager = {
             this.beats = this.beats.filter(b => Math.abs(b.time - removed[0].time) > 0.05);
         } else {
             // Yangi qo'shish
+            const snappedTime = window.UzbekUtils ? window.UzbekUtils.snapToFrame(this.currentTime, this.fps) : this.currentTime;
             const newBeat = {
                 index: this.activeBeats.length + 1,
-                time: Number(this.currentTime.toFixed(3)),
+                time: Number(snappedTime.toFixed(6)),
+                frame: Math.round(snappedTime * (this.fps || 25)),
                 strength: 0.8,
                 is_downbeat: false,
                 is_drop: false,
@@ -778,8 +833,10 @@ const BeatManager = {
 
         try {
             const payload = {
-                beats: this.activeBeats,
+                beats: this.beatsForTimeline(),
                 bpm: this.bpm,
+                fps: this.fps,
+                clipOffset: this.clipStart || 0,
                 duration: this.duration
             };
 
@@ -815,8 +872,10 @@ const BeatManager = {
 
         try {
             const payload = {
-                beats: this.activeBeats,
+                beats: this.beatsForTimeline(),
                 bpm: this.bpm,
+                fps: this.fps,
+                clipOffset: this.clipStart || 0,
                 trackIndex: 0
             };
 
@@ -844,9 +903,12 @@ const BeatManager = {
 
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({
             bpm: this.bpm,
+            fps: this.fps,
+            clip: this.clipInfo(),
             duration: this.duration,
             beatCount: this.activeBeats.length,
-            beats: this.activeBeats
+            beats: this.activeBeats,
+            beats_timeline: this.beatsForTimeline()
         }, null, 2));
 
         const downloadAnchor = document.createElement("a");

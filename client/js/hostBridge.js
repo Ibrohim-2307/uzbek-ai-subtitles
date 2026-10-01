@@ -181,6 +181,67 @@ const HostBridge = {
         });
     },
 
+    async getSequenceInfo() {
+        try {
+            if (this.hostApp === "PPRO") {
+                const info = await this.eval("ppro_getSequenceInfo()");
+                if (info && info.ok) {
+                    const fps = parseFloat(info.frameRate) || 25;
+                    if (window.UzbekUtils) window.UzbekUtils.setHostFps(fps);
+                    return { ok: true, success: true, exists: true, name: info.name,
+                             fps: fps, frameRate: fps, duration: info.duration, time: info.time };
+                }
+                return info || { ok: false, exists: false, message: "Sequence topilmadi" };
+            }
+            if (this.hostApp === "AEFT") {
+                const info = await this.eval("ae_getCompInfo()");
+                if (info && info.ok) {
+                    const fps = parseFloat(info.frameRate) || 25;
+                    if (window.UzbekUtils) window.UzbekUtils.setHostFps(fps);
+                    return { ok: true, success: true, exists: true, name: info.name,
+                             fps: fps, frameRate: fps, width: info.width, height: info.height,
+                             duration: info.duration, time: info.time };
+                }
+                return info || { ok: false, exists: false, message: "Kompozitsiya topilmadi" };
+            }
+        } catch (e) { logDebug("getSequenceInfo xatosi: " + e.message); }
+        return { ok: false, exists: false, message: "Host dastur aniqlanmadi" };
+    },
+
+    async getSelectedClip() {
+        try {
+            let raw = null;
+            if (this.hostApp === "PPRO") raw = await this.eval("ppro_getSelectedClipAudioPath()");
+            else if (this.hostApp === "AEFT") raw = await this.eval("ae_getSelectedLayerMediaPath()");
+            else return { success: false, message: "Host dastur aniqlanmadi (brauzer rejimi)" };
+            if (!raw) return { success: false, message: "Klip ma'lumoti olinmadi" };
+
+            // Host turli nomlar bilan qaytaradi: filePath | path | mediaPath
+            const path = raw.filePath || raw.path || raw.mediaPath || "";
+            if (!raw.success && !raw.ok && !path) return Object.assign({ success: false }, raw);
+
+            const clip = {
+                success: true, ok: true, path: path, filePath: path,
+                name: raw.name || (path ? String(path).split(/[\\/]/).pop() : "Klip"),
+                duration: parseFloat(raw.duration) || 0,
+                start:    parseFloat(raw.start) || 0,     // timeline'dagi boshlanish
+                end:      parseFloat(raw.end) || 0,
+                inPoint:  parseFloat(raw.inPoint) || 0,   // media ichidagi qirqim
+                outPoint: parseFloat(raw.outPoint) || 0,
+                speed: (parseFloat(raw.speed) > 0) ? parseFloat(raw.speed) : 1,
+                offset: parseFloat(raw.offset) || 0
+            };
+            if (window.UzbekUtils) {
+                const fps = window.UzbekUtils.getHostFps();
+                if (fps) clip.fps = fps;
+            }
+            return clip;
+        } catch (e) {
+            logDebug("getSelectedClip xatosi: " + e.message);
+            return { success: false, message: "Klip olishda xatolik: " + e.message };
+        }
+    },
+
     /**
      * Aktiv kompozitsiya (AE) yoki ketma-ketlik (PPro) ma'lumotini olish
      */
@@ -228,6 +289,16 @@ const HostBridge = {
             return await this.eval("ppro_getTimeDiagnostics()");
         }
         return { ok: false, success: false, message: "Host dastur aniqlanmadi" };
+    },
+
+    /**
+     * So'zma-so'z kaskad rejasini tuzish (UzbekUtils.buildWordPlan wrapper)
+     */
+    buildWordPlans(segments, options = {}) {
+        if (window.UzbekUtils && window.UzbekUtils.buildWordPlan) {
+            return window.UzbekUtils.buildWordPlan(segments, options);
+        }
+        return null;
     },
 
     /**
@@ -327,14 +398,37 @@ const HostBridge = {
             return res;
         }
 
-        timelineSegments = enforceTwoLines(timelineSegments);
+        if (window.UzbekUtils && window.UzbekUtils.rechunkSegments) {
+            timelineSegments = window.UzbekUtils.rechunkSegments(timelineSegments, {
+                fps: window.UzbekUtils.getHostFps(),
+                maxChars: 42,
+                maxLines: 2,
+                normalize: true
+            });
+        } else {
+            timelineSegments = enforceTwoLines(timelineSegments);
+        }
 
         if (this.hostApp === "AEFT") {
+            let wordPlan = null;
+            if (styleOptions && styleOptions.wordByWord && (styleOptions.wordMode === "stack" || styleOptions.wordMode === "cascade")) {
+                const fpsVal = (window.UzbekUtils && window.UzbekUtils.getHostFps) ? window.UzbekUtils.getHostFps() : 25.0;
+                wordPlan = this.buildWordPlans(timelineSegments, {
+                    fps: fpsVal,
+                    maxLines: styleOptions.wordMaxLines || 2,
+                    pauseHold: styleOptions.wordPauseHold !== undefined ? styleOptions.wordPauseHold : true,
+                    pauseThresholdSec: (styleOptions.pauseHideThresholdMs || 800) / 1000.0,
+                    charReveal: !!styleOptions.charReveal
+                });
+            }
+
             const payload = JSON.stringify({
                 segments: timelineSegments,
+                wordPlan: wordPlan,
                 style: styleOptions,
                 timelineOffset: 0.0,
-                leadIn: leadIn
+                leadIn: leadIn,
+                fps: (window.UzbekUtils && window.UzbekUtils.getHostFps) ? window.UzbekUtils.getHostFps() : 25.0
             });
             const encoded = encodeURIComponent(payload);
             return await this.eval(`ae_createSubtitles("${encoded}")`);
@@ -414,6 +508,31 @@ const HostBridge = {
                         }
                     }
                     timelineSegments = accumSegs;
+                } else if (wMode === "stack" || wMode === "cascade") {
+                    const fpsVal = (window.UzbekUtils && window.UzbekUtils.getHostFps) ? window.UzbekUtils.getHostFps() : 25.0;
+                    const wp = this.buildWordPlans(timelineSegments, {
+                        fps: fpsVal,
+                        maxLines: styleOptions.wordMaxLines || 2,
+                        pauseHold: styleOptions.wordPauseHold !== undefined ? styleOptions.wordPauseHold : true,
+                        pauseThresholdSec: pauseThresh / 1000.0
+                    });
+                    if (wp && wp.words && wp.words.length > 0) {
+                        const stackSegs = [];
+                        let sGlobalId = 1;
+                        for (let wi = 0; wi < wp.words.length; wi++) {
+                            const item = wp.words[wi];
+                            const baseSeg = timelineSegments[item.segIdx || 0] || {};
+                            stackSegs.push({
+                                ...baseSeg,
+                                id: sGlobalId++,
+                                start: item.inPoint,
+                                end: item.outPoint,
+                                text: item.word,
+                                words: [{ word: item.word, start: item.inPoint, end: item.wordEnd }]
+                            });
+                        }
+                        timelineSegments = stackSegs;
+                    }
                 }
             }
 
@@ -580,6 +699,8 @@ const HostBridge = {
         const payload = JSON.stringify({
             beats: beatsData.beats || [],
             bpm: beatsData.bpm || 120,
+            fps: beatsData.fps || (window.UzbekUtils ? window.UzbekUtils.getHostFps() : null),
+            clipOffset: beatsData.clipOffset || 0,
             clearExisting: clearExisting
         });
         const encoded = encodeURIComponent(payload);
@@ -603,6 +724,8 @@ const HostBridge = {
         const payload = JSON.stringify({
             beats: beatsData.beats || [],
             bpm: beatsData.bpm || 120,
+            fps: beatsData.fps || (window.UzbekUtils ? window.UzbekUtils.getHostFps() : null),
+            clipOffset: beatsData.clipOffset || 0,
             trackIndex: trackIndex
         });
         const encoded = encodeURIComponent(payload);

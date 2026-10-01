@@ -246,6 +246,7 @@ const SubtitleAPI = {
         if (options.file) formData.append("file", options.file);
         if (options.sensitivity !== undefined) formData.append("sensitivity", options.sensitivity);
         if (options.mode) formData.append("mode", options.mode);
+        if (options.fps !== undefined && options.fps !== null) formData.append("fps", options.fps);
         if (options.inPoint !== undefined && options.inPoint !== null) formData.append("in_point", options.inPoint);
         if (options.outPoint !== undefined && options.outPoint !== null) formData.append("out_point", options.outPoint);
         if (options.duration !== undefined && options.duration !== null) formData.append("duration", options.duration);

@@ -85,6 +85,9 @@ async function initHostUI() {
     try {
         const info = await window.HostBridge.getTimelineInfo();
         if (info && info.exists && timelineInfoEl) {
+            if (info.frameRate && window.UzbekUtils && window.UzbekUtils.setHostFps) {
+                window.UzbekUtils.setHostFps(info.frameRate);
+            }
             const fpsText = info.frameRate ? `${Number(info.frameRate).toFixed(2)} fps` : "";
             timelineInfoEl.textContent = `Aktiv: ${info.name}${fpsText ? " (" + fpsText + ")" : ""}`;
             timelineInfoEl.style.color = "#4ade80";
@@ -434,7 +437,12 @@ function initTranscribeSection() {
                     let seqFps = 25.0;
                     try {
                         const sInfo = await window.HostBridge.getSequenceInfo();
-                        if (sInfo && sInfo.fps) seqFps = parseFloat(sInfo.fps);
+                        if (sInfo && sInfo.fps) {
+                            seqFps = parseFloat(sInfo.fps);
+                            if (window.UzbekUtils && window.UzbekUtils.setHostFps) {
+                                window.UzbekUtils.setHostFps(seqFps);
+                            }
+                        }
                     } catch (eFps) {}
 
                     const clipTimelineStart = (typeof c.start === "number") ? c.start : 0.0;
@@ -563,7 +571,7 @@ function initEditorSection() {
     if (btnExportSRT) {
         btnExportSRT.addEventListener("click", async () => {
             const isWordByWord = document.getElementById("checkWordByWord")?.checked || false;
-            const wordMode = document.getElementById("selectWordMode")?.value || "accumulate";
+            const wordMode = document.getElementById("selectWordMode")?.value || "stack";
             const wordHighlight = document.getElementById("inputWordHighlightColor")?.value || "#ffe600";
             const pauseHideText = document.getElementById("checkPauseHideText")?.checked || false;
             const pauseHideThresholdMs = parseInt(document.getElementById("inputPauseHideThresholdMs")?.value, 10) || 800;
@@ -691,6 +699,8 @@ function initEditorSection() {
                 const pauseHideText = document.getElementById("checkPauseHideText")?.checked || false;
                 const pauseHideThresholdMs = parseInt(document.getElementById("inputPauseHideThresholdMs")?.value, 10) || 800;
                 const charReveal = document.getElementById("checkCharReveal")?.checked || false;
+                const wordStackLines = parseInt(document.getElementById("inputWordStackLines")?.value, 10) || 2;
+                const wordPauseHold = document.getElementById("checkWordPauseHold") ? document.getElementById("checkWordPauseHold").checked : true;
 
                 const activePreset = { 
                     ...window.PresetManager.getActivePreset(), 
@@ -704,6 +714,9 @@ function initEditorSection() {
                     pauseHideText: pauseHideText,
                     pauseHideThresholdMs: pauseHideThresholdMs,
                     pauseThresholdSec: pauseHideThresholdMs / 1000.0,
+                    wordMaxLines: wordStackLines,
+                    wordPauseHold: wordPauseHold,
+                    wordPauseThresholdSec: pauseHideThresholdMs / 1000.0,
                     charReveal: charReveal
                 };
 
