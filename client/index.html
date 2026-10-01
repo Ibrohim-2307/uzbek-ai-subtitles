@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>O'zbekcha AI Subtitr</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <!-- YUQORI HEADER -->
+    <header class="app-header">
+        <div class="logo-area">
+            <span class="logo-icon">🎙️</span>
+            <span class="app-title">O‘zbekcha AI Subtitr</span>
+        </div>
+        <div class="header-badges" style="display: flex; align-items: center; gap: 6px;">
+            <button id="btnReloadPanel" type="button" title="Panelni yangilash (Qayta yuklash)" style="background: rgba(255,255,255,0.08); border: 1px solid var(--border-color); color: #cbd5e1; border-radius: 4px; padding: 2px 6px; font-size: 11px; cursor: pointer;" onclick="window.location.reload()">🔄</button>
+            <span id="hostBadge" class="host-badge web">Yuklanmoqda...</span>
+            <div class="status-indicator">
+                <span id="backendStatusDot" class="status-dot offline" title="Backend holati"></span>
+            </div>
+        </div>
+    </header>
+
+    <!-- BO'LIMLAR (NAV TABS) -->
+    <nav class="nav-tabs">
+        <button class="tab-btn active" data-tab="tab-transcribe">⚡ Transkripsiya</button>
+        <button class="tab-btn" data-tab="tab-editor">📝 Tahrirlash</button>
+        <button class="tab-btn" data-tab="tab-presets">🎨 Stillar & Shablonlar (C: & D:)</button>
+        <button class="tab-btn" data-tab="tab-beats">🎵 Ritm & Beatlar (CapCut)</button>
+        <button class="tab-btn" data-tab="tab-settings">⚙️ Sozlamalar</button>
+    </nav>
+
+    <!-- ASOSIY ICHKI TARKIB -->
+    <main class="content-body">
+
+        <!-- 1-BO'LIM: TRANSKRIPSIYA -->
+        <section id="tab-transcribe" class="tab-content active">
+            <div class="form-group">
+                <label>Audio / Video Manbasi</label>
+                <div class="input-group">
+                    <input type="text" id="mediaSourceInput" class="input-text" placeholder="Timeline klipi yoki fayl yo'li..." readonly>
+                    <button id="btnSelectMedia" class="btn" title="Timeline'da tanlangan klipni olish">🎯 Tanlash</button>
+                </div>
+                <small id="timelineInfo" style="color: var(--text-muted); display: block; margin-top: 4px;">Timeline holati tekshirilmoqda...</small>
+            </div>
+
+            <div class="form-group">
+                <label>Yoki faylni yuklang</label>
+                <input type="file" id="fileUploadInput" class="input-text" accept="audio/*,video/*">
+            </div>
+
+            <div class="form-group">
+                <label>STT Provayderi</label>
+                <select id="transcribeProviderSelect" class="input-select">
+                    <option value="gemini">Google Gemini AI (Google One / AI Studio - Tezkor)</option>
+                    <option value="local_whisper">Lokal Faster-Whisper (Offline / Bepul)</option>
+                    <option value="google">Google Cloud Speech-to-Text</option>
+                    <option value="azure">Microsoft Azure Speech</option>
+                    <option value="custom">Maxsus STT API (OpenAI / Mohirdev)</option>
+                </select>
+            </div>
+
+            <!-- WHISPER MODELI (ANIQLIK VA TEZLIK) -->
+            <div class="form-group" id="whisperModelGroup" style="display: none;">
+                <label style="display: flex; justify-content: space-between;">
+                    <span>Whisper Modeli</span>
+                    <span style="font-size: 10px; color: #4ade80;">⭐ Tavsiya: Medium / Large-v3</span>
+                </label>
+                <select id="transcribeModelSelect" class="input-select">
+                    <option value="small">Small (Tezkor va yengil)</option>
+                    <option value="medium" selected>Medium (Yuqori aniqlik - Tavsiya qilinadi)</option>
+                    <option value="large-v3">Large-v3 (Maksimal aniqlik va so‘z vaqti)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Yozuv Turi</label>
+                <select id="transcribeScriptSelect" class="input-select">
+                    <option value="latin">O‘zbekcha Lotin (o‘, g‘, sh, ch)</option>
+                    <option value="cyrillic">O‘zbekcha Kirill (ў, ғ, ш, ч)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-group">
+                    <input type="checkbox" id="checkNumbersToWords">
+                    <span>Raqamlarni so‘z ko‘rinishida yozish (masalan: 1991 ➔ bir ming to‘qqiz yuz to‘qson bir)</span>
+                </label>
+            </div>
+
+            <button id="btnStartTranscribe" class="btn btn-primary btn-block" style="padding: 11px; font-size: 13px; margin-top: 10px;">
+                🚀 O‘zbekcha Nutqni Matnga Aylantirish
+            </button>
+
+            <!-- YUKLANISH JARAYONI -->
+            <div id="progressContainer" class="progress-box" style="display: none;">
+                <div class="spinner"></div>
+                <div id="progressStatus" class="progress-text">Tayyorlanmoqda...</div>
+            </div>
+        </section>
+
+        <!-- 2-BO'LIM: TAHRIRLASH -->
+        <section id="tab-editor" class="tab-content">
+            <div class="editor-toolbar">
+                <span id="subtitleCountText" style="font-weight: 600; color: var(--text-secondary);">0 ta jumla</span>
+                <div style="display: flex; gap: 6px;">
+                    <button id="btnClearEditor" class="btn btn-action" style="color: #f87171;" title="Barcha subtitrlarni tozalash (ekranni bo'shatish)" onclick="SubtitleEditor.clear(true)">🗑️ Tozalash</button>
+                    <button id="btnAddSegment" class="btn btn-action">➕ Jumla qo‘shish</button>
+                    <label class="btn btn-action" style="cursor: pointer;">
+                        📥 Import (SRT/JSON)
+                        <input type="file" id="importFileInput" accept=".srt,.json" style="display: none;">
+                    </label>
+                </div>
+            </div>
+
+            <!-- BO'LISH USLUBI (GAPLAR, REELS, SO'ZMA-SO'Z) -->
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding: 5px 8px; background: rgba(255,255,255,0.03); border-radius: 4px;">
+                <span style="font-size: 11px; color: var(--text-muted);">Uslub / Format:</span>
+                <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                    <button class="btn btn-action" style="font-size: 11px; padding: 3px 8px; font-weight: 700; color: #10b981; border: 1px solid rgba(16,185,129,0.5); background: rgba(16,185,129,0.1);" onclick="SubtitleEditor.enforceMaxTwoLines()" title="Barcha subtitrlarni qat'iy ko'pi bilan 1 yoki 2 qatorli qilib bo'lish (hech qachon 3-4 qator bo'lmaydi)">✌️ Maks 2 Qator</button>
+                    <button class="btn btn-action" style="font-size: 11px; padding: 3px 8px; font-weight: 600; color: #60a5fa;" onclick="SubtitleEditor.mergeToNaturalSentences()" title="Mayda so'zlarni to'liq tabiiy gaplarga birlashtirish (maks 2 qator)">🔗 Tabiiy Gaplar</button>
+                    <button class="btn btn-action" style="font-size: 11px; padding: 3px 8px;" onclick="SubtitleEditor.splitAllByPunctuation()" title="Tinish belgilari bo'yicha qisqa gaplarga ajratish">✂️ Vergul/Nuqta</button>
+                    <button class="btn btn-action" style="font-size: 11px; padding: 3px 8px;" onclick="SubtitleEditor.splitByWordCount(3)" title="Har 2-3 so'zdan ixcham qatorlar (Shorts/Reels)">⚡ 2-3 so‘zdan</button>
+                    <button class="btn btn-action" style="font-size: 11px; padding: 3px 8px;" onclick="SubtitleEditor.splitByWordCount(1)" title="Har bir so'z alohida alohida chiqadi">1️⃣ 1 so‘zdan</button>
+                </div>
+            </div>
+
+            <!-- QIDIRISH VA ALMASHTIRISH -->
+            <div class="search-replace-bar">
+                <input type="text" id="searchInput" class="input-text" style="width: 100px; flex: 1;" placeholder="Qidirish...">
+                <input type="text" id="replaceInput" class="input-text" style="width: 100px; flex: 1;" placeholder="Almashtirish...">
+                <button id="btnSearchReplace" class="btn btn-action">Tuzatish</button>
+                <label class="checkbox-group" style="font-size: 11px;" title="Keyingi transkripsiyalarda ham avtomatik to'g'irlash uchun">
+                    <input type="checkbox" id="checkSaveToDict">
+                    <span>Lug‘atga saqlash</span>
+                </label>
+            </div>
+
+            <!-- TO'LQIN SHAKLI VA SO'Z VAQTLARI TREKI (WAVEFORM & WORD TIMELINE) -->
+            <div id="editorWaveformBox" style="margin-bottom: 10px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span style="font-weight: 600; font-size: 11px; color: #38bdf8;">🌊 To‘lqin shakli va So‘z bloklari</span>
+                        <span id="waveformStatsBadge" style="font-size: 9px; padding: 1px 5px; border-radius: 3px; background: rgba(56, 189, 248, 0.15); color: #38bdf8;">Tayyor</span>
+                    </div>
+                    <div style="display: flex; gap: 4px; align-items: center;">
+                        <button type="button" class="btn btn-action" id="btnOpenTimeLog" style="font-size: 10px; padding: 2px 7px; color: #a78bfa; border-color: rgba(167, 139, 250, 0.4);" title="Har bir so'zning STT, offset va timeline vaqtlarini batafsil ko'rish">⏱️ Vaqt Logi</button>
+                        <button type="button" class="btn btn-action" id="btnRealignSelected" style="font-size: 10px; padding: 2px 7px; color: #34d399; border-color: rgba(52, 211, 153, 0.4);" title="Ovoz energiyasi va pauzalar bo'yicha so'zlarni qaytadan aniqlashtirish" onclick="SubtitleEditor.realignWithAudioEnergy()">⚡ Qayta tekislash</button>
+                        <button type="button" class="btn btn-action" id="btnReanalyzeSegment" style="font-size: 10px; padding: 2px 7px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);" title="Aktiv subtitr qismini qaytadan tahlil qilish" onclick="SubtitleEditor.reanalyzeCurrentSegment()">🔄 Qayta tahlil</button>
+                        <button type="button" class="btn btn-action" id="btnToggleTapSync" style="font-size: 10px; padding: 2px 7px; color: #fbbf24; border-color: rgba(251, 191, 36, 0.4);" title="Audio eshitilayotganda Space yoki tugmani bosib so'zlarni birma-bir belgilash" onclick="SubtitleEditor.toggleTapSync()">🎙️ Tap-Sinxron</button>
+                    </div>
+                </div>
+
+                <!-- Interaktiv to'lqin shakli va bloklar konteyneri -->
+                <div id="waveformTimelineContainer" class="waveform-timeline-container" style="position: relative; height: 75px; background: #13171f; border-radius: 4px; overflow-x: auto; overflow-y: hidden; border: 1px solid rgba(255,255,255,0.08);">
+                    <canvas id="waveformCanvas" width="800" height="75" style="display: block; width: 100%; height: 100%;"></canvas>
+                    <div id="waveformWordBlocksLayer" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 10px; color: var(--text-muted);">
+                    <span id="waveformTimeInfo">💡 Maslahat: So‘z blokini bosib playhead'ni sakratishingiz yoki chegarasini tortishingiz mumkin.</span>
+                    <span style="display: flex; gap: 8px;">
+                        <span style="display: inline-flex; align-items: center; gap: 3px;"><span style="width: 8px; height: 8px; background: #10b981; border-radius: 2px; display: inline-block;"></span> Aniq</span>
+                        <span style="display: inline-flex; align-items: center; gap: 3px;"><span style="width: 8px; height: 8px; background: #f59e0b; border-radius: 2px; display: inline-block;"></span> O‘rtacha</span>
+                        <span style="display: inline-flex; align-items: center; gap: 3px;"><span style="width: 8px; height: 8px; background: #ef4444; border-radius: 2px; display: inline-block;"></span> ⚠️ Past ishonch</span>
+                    </span>
+                </div>
+            </div>
+
+            <!-- SUBTITR QATORLARI -->
+            <div id="subtitleListContainer" class="subtitle-list">
+                <div class="empty-state">
+                    <div class="empty-icon">📝</div>
+                    <p>Subtitrlar mavjud emas</p>
+                    <small>Transkripsiya boshlang yoki fayl import qiling</small>
+                </div>
+            </div>
+
+            <!-- EKSPORT VA TIMELINE'GA JOYLASH -->
+            <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+                <div style="padding: 6px 10px; background: rgba(255,255,255,0.04); border-radius: 4px; font-size: 11px; border: 1px solid var(--border-color);">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="color: var(--text-secondary); display: flex; align-items: center; gap: 4px;" title="Subtitr ovozdan orqada yoki oldinda qolsa, bu yerdan millisekundlab surishingiz mumkin">
+                            🎯 Vaqtni nozik siljitish (Nudge):
+                        </span>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <input type="number" id="timelineOffsetInput" step="0.05" value="0.0" style="width: 55px; padding: 2px 4px; font-size: 11px; text-align: center; border-radius: 3px; background: var(--bg-input); color: #4ade80; border: 1px solid var(--border-color); font-weight: bold;" title="0.0s = o'z vaqti. Manfiy (masalan -0.2s) = ovozdan oldinroq chiqaradi">
+                            <span style="color: var(--text-muted);">sek</span>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 4px; justify-content: flex-end; align-items: center; flex-wrap: wrap;">
+                        <span style="font-size: 9px; color: var(--text-muted); margin-right: auto;">Ovozga moslash (Nudge):</span>
+                        <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.nudgeOffset(-0.25)">-250ms</button>
+                        <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.nudgeOffset(-0.10)">-100ms</button>
+                        <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.nudgeOffset(-0.05)">-50ms</button>
+                        <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px; font-weight: bold; color: #4ade80;" onclick="window.nudgeOffset(0.0)">0.0s</button>
+                        <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.nudgeOffset(0.05)">+50ms</button>
+                        <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.nudgeOffset(0.10)">+100ms</button>
+                        <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.nudgeOffset(0.25)">+250ms</button>
+                    </div>
+                </div>
+
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(255,255,255,0.02); border-radius: 4px; font-size: 11px; border: 1px solid var(--border-color);">
+                    <span style="color: var(--text-secondary); display: flex; align-items: center; gap: 4px;" title="0.0 sek = nutq boshlanishi bilanoq chiqadi (oldindan chiqib qolmaydi)">
+                        ⚡ Animatsiya kirish vaqti (lead-in):
+                    </span>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <input type="number" id="animationLeadInInput" step="0.05" min="0.0" max="0.5" value="0.0" style="width: 55px; padding: 3px 5px; font-size: 11px; text-align: center; border-radius: 3px; background: var(--bg-input); color: #4ade80; border: 1px solid var(--border-color); font-weight: bold;" title="0.0 sek = nutq aytilgan lahzada chiqadi (oldin chiqmaydi)">
+                        <span style="color: var(--text-muted);">sek</span>
+                    </div>
+                </div>
+
+                <button id="btnInsertTimeline" class="btn btn-primary btn-block" style="padding: 10px; font-weight: 600;">
+                    🎬 Video Ustidagi Trekka Joylash (V2 / AE)
+                </button>
+                <div style="display: flex; gap: 6px;">
+                    <button id="btnExportSRT" class="btn btn-block">Eksport SRT</button>
+                    <button id="btnExportVTT" class="btn btn-block">Eksport VTT</button>
+                    <button id="btnExportJSON" class="btn btn-block">Eksport JSON</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 3-BO'LIM: STILLAR VA ANIMATSIYA (.MOGRT, .FFX, C: va D: DISK) -->
+        <section id="tab-presets" class="tab-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label style="font-weight: 600; font-size: 11px; color: #60a5fa;">📁 C: VA D: DISKDAGI SHABLON VA STILLAR</label>
+                <button id="btnExportPack" class="btn btn-action" title="Do'stingizga jo'natish uchun to'plamni saqlash">📦 Eksport Pack</button>
+            </div>
+
+            <!-- BIRIKTIRILAYOTGAN SO'Z BANNERI (Alohida so'zga animatsiya tanlanganda) -->
+            <div id="segmentTargetBanner" style="display: none; padding: 7px 10px; background: rgba(34, 197, 94, 0.15); border: 1px solid #22c55e; border-radius: 4px; margin-bottom: 8px; font-size: 11px; align-items: center; justify-content: space-between;">
+                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%;">
+                    <span style="color: #4ade80; font-weight: bold;">🎯 Alohida jumla uchun animatsiya tanlanmoqda:</span>
+                    <div id="segmentTargetText" style="color: #fff; font-size: 11px; margin-top: 2px; font-weight: 600;"></div>
+                </div>
+                <button type="button" class="btn btn-action" style="color: #f87171; border-color: rgba(248,113,113,0.4); font-size: 10px; padding: 2px 7px;" onclick="SubtitleEditor.cancelPickStyle()">✕ Bekor qilish</button>
+            </div>
+
+            <!-- QIDIRISH VA FILTRLAR -->
+            <div style="margin-bottom: 8px;">
+                <input type="text" id="presetSearchInput" class="input-text" placeholder="🔍 Shablon qidirish (Hormozi, Beast, Smooth, Zoom, 3D)..." style="width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 6px 10px; font-size: 11px;">
+                <div id="presetCategoryTabs" style="display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px;">
+                    <button class="btn btn-action active-preset-cat" data-category="all" style="font-size: 10px; padding: 3px 8px; white-space: nowrap; font-weight: bold; color: #60a5fa;">🌟 Barchasi</button>
+                    <button class="btn btn-action" data-category="aejuice" style="font-size: 10px; padding: 3px 8px; white-space: nowrap;">🧃 AEJuice Subtitrlar</button>
+                    <button class="btn btn-action" data-category="captioneer" style="font-size: 10px; padding: 3px 8px; white-space: nowrap;">📱 Captioneer (9:16)</button>
+                    <button class="btn btn-action" data-category="hormozi" style="font-size: 10px; padding: 3px 8px; white-space: nowrap;">🔥 Hormozi & Beast</button>
+                    <button class="btn btn-action" data-category="dynamic" style="font-size: 10px; padding: 3px 8px; white-space: nowrap;">⚡ Kinetik & Dinamik</button>
+                    <button class="btn btn-action" data-category="titles" style="font-size: 10px; padding: 3px 8px; white-space: nowrap;">📺 Titllar & Fonlar</button>
+                </div>
+            </div>
+
+            <!-- AKTIV SHABLON BANNERI -->
+            <div id="activePresetBanner" style="padding: 6px 10px; background: rgba(96,165,250,0.12); border: 1px solid rgba(96,165,250,0.3); border-radius: 4px; margin-bottom: 10px; font-size: 11px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%;">
+                    <span style="color: var(--text-muted);">Tanlangan:</span>
+                    <strong id="activePresetTitle" style="color: #60a5fa; margin-left: 4px;">TikTok & Reels</strong>
+                </div>
+                <div style="display: flex; gap: 5px;">
+                    <button id="btnApplyToPlayhead" class="btn btn-action" style="font-size: 10px; padding: 3px 8px; color: #4ade80; border-color: rgba(74,222,128,0.4);" title="Ushbu animatsiyani timeline'dagi playhead (kursor) turgan joyga qo'yish">▶ Playhead'ga qo‘yish</button>
+                    <button id="btnApplyActiveToAll" class="btn btn-primary" style="font-size: 10px; padding: 3px 8px;" title="Barcha subtitrlarni ushbu tanlangan shablonda timeline'ga qo'yish">🚀 Barchasiga qo‘llash</button>
+                </div>
+            </div>
+
+            <!-- PRESET KARTALARI RO'YXATI -->
+            <div id="presetGrid" class="preset-grid" style="max-height: 380px; overflow-y: auto;">
+                <!-- JavaScript orqali to'ldiriladi -->
+            </div>
+
+            <!-- AEJUICE USLUBIDAGI STIL VA SHRIFT SOZLAMALARI -->
+            <div class="customizer-box" style="margin-top: 12px; padding: 10px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 6px;">
+                <div style="font-weight: 600; font-size: 11px; color: #60a5fa; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+                    <span>⚙️ Stil & Shrift Sozlamalari</span>
+                    <span style="font-size: 10px; color: var(--text-muted);">MOGRT & Text</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                    <div>
+                        <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 2px;">Shrift Hajmi</label>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <input type="range" id="customFontSize" min="20" max="90" value="44" style="flex: 1;">
+                            <span id="fontSizeVal" style="font-size: 10px; min-width: 25px; color: #cbd5e1;">44px</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 2px;">Vertikal Joylashuvi (Y)</label>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <input type="range" id="customPosY" min="40" max="95" value="75" style="flex: 1;">
+                            <span id="posYVal" style="font-size: 10px; min-width: 25px; color: #cbd5e1;">75%</span>
+                        </div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <label style="font-size: 10px; color: var(--text-secondary);">Matn rangi:</label>
+                        <input type="color" id="customTextColor" value="#ffffff" style="border: none; width: 22px; height: 22px; border-radius: 3px; cursor: pointer; background: transparent;">
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <label style="font-size: 10px; color: var(--text-secondary);">Karaoke rangi:</label>
+                        <input type="color" id="customKaraokeColor" value="#ffe600" style="border: none; width: 22px; height: 22px; border-radius: 3px; cursor: pointer; background: transparent;">
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <label class="checkbox-group" style="font-size: 10px; margin: 0;">
+                            <input type="checkbox" id="customAllCaps">
+                            <span>BOSH HARFLAR</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2) YANGI SO'ZMA-SO'Z (WORD-BY-WORD) REJIMI SOZLAMALARI -->
+            <div class="customizer-box" style="margin-top: 10px; padding: 10px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 6px;">
+                <div style="font-weight: 600; font-size: 11px; color: #60a5fa; display: flex; align-items: center; justify-content: space-between;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span>🔤 So‘zma-so‘z ko‘rsatish</span>
+                        <span id="wordModeStatusBadge" style="font-size: 9px; padding: 1px 5px; border-radius: 3px; background: rgba(255,255,255,0.06); color: var(--text-muted);">O‘chirilgan</span>
+                    </div>
+                    <label class="switch" title="So'zma-so'z ko'rsatishni yoqish / o'chirish">
+                        <input type="checkbox" id="checkWordByWord">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <div id="wordByWordSettingsBox" style="display: none; flex-direction: column; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1);">
+                    <!-- Rejim tanlovi -->
+                    <div>
+                        <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 2px;">Rejim tanlovi:</label>
+                        <select id="selectWordMode" class="input-select" style="width: 100%; font-size: 11px; padding: 4px 6px;">
+                            <option value="accumulate">📥 To‘planib borsin (har so‘z aytilganda qo‘shiladi)</option>
+                            <option value="single">1️⃣ Bitta so‘z (faqat hozir aytilayotgan so‘z ko‘rinadi)</option>
+                            <option value="karaoke">✨ Ajratib bo‘yash (karaoke - so‘z rangi/ajralishi o‘zgaradi)</option>
+                        </select>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        <div>
+                            <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 2px;">Qatordagi maks so‘z:</label>
+                            <input type="number" id="inputMaxWordsPerLine" min="1" max="10" value="4" class="input-text" style="width: 100%; font-size: 11px; padding: 3px 6px; box-sizing: border-box;" title="Bir qatorda ko'pi bilan nechta so'z to'planishi kerak">
+                        </div>
+                        <div>
+                            <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 2px;">So‘z animatsiyasi:</label>
+                            <select id="selectWordAnimation" class="input-select" style="width: 100%; font-size: 11px; padding: 3px 6px;">
+                                <option value="pop">💥 Pop (sakrab chiqish)</option>
+                                <option value="fade">🌫️ Fade (asta paydo bo‘lish)</option>
+                                <option value="none">⏹️ Oddiy (animatsiyasiz)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <label style="font-size: 10px; color: var(--text-secondary);">Ajratish (Karaoke) rangi:</label>
+                            <input type="color" id="inputWordHighlightColor" value="#ffe600" style="border: none; width: 22px; height: 22px; border-radius: 3px; cursor: pointer; background: transparent;">
+                        </div>
+                    </div>
+
+                    <!-- PAUZADA MATNNI YASHIRISH -->
+                    <div style="background: rgba(0,0,0,0.2); padding: 6px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <label class="checkbox-group" style="font-size: 11px; margin: 0; font-weight: 600; color: #facc15;">
+                                <input type="checkbox" id="checkPauseHideText">
+                                <span>⏸️ Pauzada matnni yashirish</span>
+                            </label>
+                            <div style="display: flex; align-items: center; gap: 4px;">
+                                <input type="number" id="inputPauseHideThresholdMs" min="200" max="3000" step="50" value="800" style="width: 50px; font-size: 10px; padding: 2px 4px; text-align: center;" class="input-text" title="Necha ms pauzadan keyin matn yashirilishi kerak">
+                                <span style="font-size: 10px; color: var(--text-muted);">ms</span>
+                            </div>
+                        </div>
+                        <small style="font-size: 10px; color: var(--text-muted); display: block; margin-top: 2px;">
+                            Nutq to'xtaganda matn yo'qoladi, yangi so'z faqat odam qayta gapirganda chiqadi.
+                        </small>
+                    </div>
+
+                    <!-- HARF-HARF / BO'G'IN-BO'G'IN OCHILISH (UZUN SO'ZLAR UCHUN) -->
+                    <div style="background: rgba(0,0,0,0.2); padding: 6px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">
+                        <label class="checkbox-group" style="font-size: 11px; margin: 0; font-weight: 600; color: #a78bfa;">
+                            <input type="checkbox" id="checkCharReveal">
+                            <span>🔤 Harf-harf / bo‘g‘in-bo‘g‘in ochilish</span>
+                        </label>
+                        <small style="font-size: 10px; color: var(--text-muted); display: block; margin-top: 2px;">
+                            Cho'zib aytilgan so'zlar harflari nutq davomida bosqichma-bosqich paydo bo'ladi.
+                        </small>
+                    </div>
+
+                    <!-- OVOZ ENERGIYASI BILAN ANIQLLASHTIRISH (AUDIO ENERGY SNAP) -->
+                    <div style="background: rgba(0,0,0,0.2); padding: 6px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">
+                        <label class="checkbox-group" style="font-size: 11px; margin: 0; font-weight: 600; color: #34d399;">
+                            <input type="checkbox" id="checkAudioEnergySnap" checked>
+                            <span>⚡ Ovoz energiyasi bilan aniqlashtirish (Snap)</span>
+                        </label>
+                        <small style="font-size: 10px; color: var(--text-muted); display: block; margin-top: 2px;">
+                            Har bir so'z boshlanishini ovozning ko'tarilishiga (onset) tortadi va sukutni to'g'rilaydi.
+                        </small>
+                    </div>
+
+                    <!-- Global vaqt siljitish ("Sinxronni sozlash" ± millisekund) -->
+                    <div style="background: rgba(0,0,0,0.25); padding: 7px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.06);">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                            <span style="font-size: 10px; color: #38bdf8; font-weight: 600;" title="So'z ovozdan oldin yoki keyin tushayotgan bo'lsa, barcha so'zlarni bir vaqtda surish">
+                                ⏱️ Sinxronni sozlash (Global Offset):
+                            </span>
+                            <span id="syncOffsetMsLabel" style="font-size: 11px; font-weight: bold; color: #4ade80;">0 ms</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <input type="range" id="rangeSyncOffsetMs" min="-500" max="500" step="10" value="0" style="flex: 1;" title="± millisekundlarda siljitish">
+                            <input type="number" id="inputSyncOffsetMs" min="-1000" max="1000" step="10" value="0" style="width: 55px; font-size: 10px; padding: 2px 4px; text-align: center;" class="input-text">
+                        </div>
+                        <div style="display: flex; gap: 3px; justify-content: flex-end; margin-top: 4px; flex-wrap: wrap;">
+                            <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.setWordSyncOffset(-200)">-200ms</button>
+                            <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.setWordSyncOffset(-100)">-100ms</button>
+                            <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.setWordSyncOffset(0)">0ms</button>
+                            <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.setWordSyncOffset(100)">+100ms</button>
+                            <button type="button" class="btn btn-action" style="font-size: 9px; padding: 1px 4px;" onclick="window.setWordSyncOffset(200)">+200ms</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- YANGI STIL VA IMPORT BOSHQARUVI -->
+            <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 8px;">
+                <button id="btnSaveFromLayer" class="btn btn-block" title="After Effects'da tanlangan Text layer'ining barcha stillarini o'qib saqlaydi">
+                    🎨 Tanlangan Text Qatlamidan Stilni Saqlash
+                </button>
+
+                <div style="display: flex; gap: 6px;">
+                    <label class="btn btn-block" style="cursor: pointer;">
+                        ✨ .ffx Animatsiya Import
+                        <input type="file" id="ffxFileInput" accept=".ffx" style="display: none;">
+                    </label>
+                    <label class="btn btn-block" style="cursor: pointer;">
+                        🎞️ .mogrt Shablon Import
+                        <input type="file" id="mogrtFileInput" accept=".mogrt" style="display: none;">
+                    </label>
+                </div>
+
+                <label class="btn btn-block" style="cursor: pointer;">
+                    📥 Stil To‘plamini Import Qilish (.uzsubpack)
+                    <input type="file" id="packFileInput" accept=".uzsubpack,.json" style="display: none;">
+                </label>
+            </div>
+        </section>
+
+        <!-- 4-BO'LIM: CAPCUT USLUBIDAGI RITM VA BEATLAR (MATCH CUT) -->
+        <section id="tab-beats" class="tab-content">
+            <div class="form-group">
+                <label style="font-weight: 600; font-size: 11px; color: #00e5ff;">🎵 Audio / Musiqa Manbasi</label>
+                <div class="input-group">
+                    <input type="text" id="beatSourceInput" class="input-text" placeholder="Timeline klipi yoki audio fayl..." readonly>
+                    <button id="btnBeatSelectClip" class="btn" title="Timeline'da tanlangan klipni olish">🎯 Tanlash</button>
+                </div>
+                <small id="beatSourceInfo" style="color: var(--text-muted); display: block; margin-top: 4px;">Timeline'da musiqa klipini tanlang yoki fayl yuklang</small>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 11px;">Yoki audio faylni yuklang (MP3, WAV, M4A)</label>
+                <input type="file" id="beatFileInput" class="input-text" accept="audio/*,video/*">
+            </div>
+
+            <!-- CAPCUT USLUBIDAGI ASOSIY BEATS OYNASI -->
+            <div class="capcut-beat-box">
+                <div class="beat-header">
+                    <span class="beat-header-title">
+                        <span>⚡ Beats (Ritm & Kadr Almashish)</span>
+                    </span>
+                    <div class="beat-badges-row">
+                        <span id="beatBpmBadge" class="beat-badge bpm">-- BPM</span>
+                        <span id="beatCountBadge" class="beat-badge count">0 ta nuqta</span>
+                        <span id="beatDurationBadge" class="beat-badge">0.0s</span>
+                    </div>
+                </div>
+
+                <!-- VIZUAL WAVEFORM CANVAS (Cyan to'lqin va oltin sariq nuqtalar) -->
+                <div class="beat-waveform-container">
+                    <canvas id="beatWaveformCanvas" height="120"></canvas>
+                </div>
+
+                <!-- TIMELINE NAZORAT TUGMALARI -->
+                <div class="beat-timeline-controls">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <button id="btnBeatPlayPause" type="button" class="btn btn-action" style="font-size: 11px; padding: 4px 10px;">
+                            ▶️ Eshitib ko‘rish
+                        </button>
+                        <span id="beatCurrentTimeText" class="beat-current-time">0:00.00</span>
+                    </div>
+
+                    <!-- CAPCUT + ADD BEAT TUGMASI -->
+                    <button id="btnBeatAddRemove" type="button" class="capcut-add-beat-btn" title="Kursor turgan joyga qo'lda beat qo'shish yoki o'chirish">
+                        <span>➕ Beat qo‘shish</span>
+                    </button>
+                </div>
+
+                <!-- METRONOM VA AUTO-GENERATE -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 11px;">
+                    <button id="btnBeatAutoGenerate" type="button" class="btn btn-primary" style="font-size: 11px; padding: 5px 12px; background: #00bcd4; border-color: #00bcd4; color: #000; font-weight: bold;">
+                        ⚡ Avtomatik Ritm Aniqlash (Auto-generate)
+                    </button>
+                    <label class="checkbox-group" style="font-size: 11px; margin: 0;">
+                        <input type="checkbox" id="checkBeatMetronome">
+                        <span title="Har bir zarba nuqtasiga kelganda eshitiladigan chertish ovozi">🔔 Metronom zarbasi</span>
+                    </label>
+                </div>
+
+                <!-- CAPCUT SEZGIRLIK SLIDERI (LIGHT -> INTENSE) -->
+                <div class="beat-intensity-box">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <label style="font-size: 11px; font-weight: 600; color: #cbd5e1;">Ritm Sezgirligi (Intensity):</label>
+                        <span style="font-size: 10px; color: #00e5ff;">CapCut slaydri</span>
+                    </div>
+                    <input type="range" id="beatIntensitySlider" class="beat-intensity-slider" min="0.0" max="1.0" step="0.05" value="0.5">
+                    <div class="beat-intensity-ticks">
+                        <span>Yengil (Light)</span>
+                        <span>Yumshoq</span>
+                        <span class="active">O‘rtacha</span>
+                        <span>Dinamik</span>
+                        <span>Intensiv (Intense)</span>
+                    </div>
+                </div>
+
+                <!-- REJIM PRESETLARI -->
+                <div style="margin-top: 10px;">
+                    <label style="font-size: 10px; color: var(--text-muted); display: block; margin-bottom: 4px;">Mavzuli Kadr Rejimlari:</label>
+                    <div class="beat-mode-group">
+                        <button type="button" class="beat-mode-btn active" data-mode="auto">🌟 Barcha Ritm</button>
+                        <button type="button" class="beat-mode-btn" data-mode="drops">🔥 Bass & Drops (Katta O'tish)</button>
+                        <button type="button" class="beat-mode-btn" data-mode="light">⭐ Asosiy Taktlar (Sokin)</button>
+                        <button type="button" class="beat-mode-btn" data-mode="intense">⚡ Tezkor Reels/Shorts</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- YUKLANISH JARAYONI -->
+            <div id="beatProgressContainer" class="progress-box" style="display: none; margin-bottom: 12px;">
+                <div class="spinner"></div>
+                <div id="beatProgressStatus" class="progress-text">Musiqa tahlil qilinmoqda...</div>
+            </div>
+
+            <!-- ADOBE TIMELINE HARAKATLARI -->
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+                <button id="btnApplyBeatMarkers" class="btn btn-primary btn-block" style="padding: 11px; font-weight: bold; background: linear-gradient(135deg, #0265dc, #00bcd4); border: none;">
+                    🎯 Timeline'ga Ritm Markerlarini Joylash (Shift+M)
+                </button>
+
+                <div style="display: flex; gap: 8px;">
+                    <button id="btnBeatAutoCut" class="btn btn-block" style="padding: 9px; font-weight: 600; color: #f59e0b; border-color: rgba(245, 158, 11, 0.4);" title="Premiere Pro timeline'dagi videoni avtomatik pichoq (Razor) bilan kesib chiqadi">
+                        ✂️ Videoni Avtomatik Kesish (Auto Cut)
+                    </button>
+                    <button id="btnBeatExport" class="btn btn-block" style="padding: 9px;">
+                        📥 Eksport (JSON)
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 5-BO'LIM: SOZLAMALAR -->
+        <section id="tab-settings" class="tab-content">
+
+            <div class="form-group">
+                <label>Asosiy STT Provayderi</label>
+                <select id="cfgProvider" class="input-select">
+                    <option value="gemini">Google Gemini AI (Google One / AI Studio - Tavsiya)</option>
+                    <option value="local_whisper">Lokal Whisper (Offline / CTranslate2)</option>
+                    <option value="google">Google Cloud Speech-to-Text</option>
+                    <option value="azure">Microsoft Azure Speech</option>
+                    <option value="custom">Maxsus Tashqi STT API</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Whisper Model Hajmi (Faqat lokal Whisper uchun)</label>
+                <select id="cfgModelSize" class="input-select">
+                    <option value="tiny">Tiny (Juda tez, kam aniqlik)</option>
+                    <option value="base">Base (Tezkor)</option>
+                    <option value="small">Small (Tavsiya etiladi: tez va aniq)</option>
+                    <option value="medium">Medium (Yuqori sifat, ko'proq xotira)</option>
+                    <option value="large-v3">Large-v3 (Maksimal aniqlik, kuchli GPU kerak)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Standart Yozuv Turi</label>
+                <select id="cfgScript" class="input-select">
+                    <option value="latin">O‘zbekcha Lotin</option>
+                    <option value="cyrillic">O‘zbekcha Kirill</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Maksimal Qator Uzunligi (Belgilar soni)</label>
+                <input type="number" id="cfgLineLen" class="input-text" value="35" min="15" max="80">
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-group">
+                    <input type="checkbox" id="cfgNumWords">
+                    <span>Raqamlarni har doim so‘zga aylantirish</span>
+                </label>
+            </div>
+
+            <!-- API KALITLARI -->
+            <div style="background: var(--bg-surface); padding: 10px; border-radius: 4px; margin-bottom: 12px; border: 1px solid var(--border-color);">
+                <div style="font-weight: 600; font-size: 11px; margin-bottom: 8px; color: var(--gold);">XAVFSIZ API KALITLAR</div>
+                <div class="form-group">
+                    <label>Google Gemini API Key (<a href="https://aistudio.google.com" target="_blank" style="color: #60a5fa; text-decoration: underline;">aistudio.google.com</a> dan bepul olinadi)</label>
+                    <input type="password" id="cfgGeminiKey" class="input-text" placeholder="AIzaSy... (Google One / AI Studio kaliti)">
+                </div>
+                <div class="form-group">
+                    <label>Google Cloud Speech API Key</label>
+                    <input type="password" id="cfgGoogleKey" class="input-text" placeholder="AIzaSy...">
+                </div>
+                <div class="form-group">
+                    <label>Azure Speech Key</label>
+                    <input type="password" id="cfgAzureKey" class="input-text" placeholder="Azure Cognitive Services kaliti...">
+                </div>
+                <div class="form-group">
+                    <label>Maxsus API URL (OpenAI / Mohirdev)</label>
+                    <input type="text" id="cfgCustomUrl" class="input-text" placeholder="https://api.openai.com/v1/audio/transcriptions">
+                </div>
+            </div>
+
+            <!-- O'ZBEKCHA SHAXSIY LUG'AT -->
+            <div style="margin-bottom: 12px;">
+                <label style="font-weight: 600; font-size: 11px; color: var(--text-secondary);">O‘ZBEKCHA SHAXSIY LUG‘AT (Xatolarni avtomatik tuzatish)</label>
+                <div class="input-group" style="margin-top: 6px; margin-bottom: 6px;">
+                    <input type="text" id="dictWrongInput" class="input-text" placeholder="Xato so'z (masalan: xam)">
+                    <input type="text" id="dictRightInput" class="input-text" placeholder="To'g'risi (masalan: ham)">
+                    <button id="btnAddDictWord" class="btn btn-action">Qo‘shish</button>
+                </div>
+                <div id="dictWordList" class="dict-box">
+                    <!-- JavaScript orqali to'ldiriladi -->
+                </div>
+            </div>
+
+            <button id="btnSaveConfig" class="btn btn-primary btn-block">💾 Sozlamalarni Saqlash</button>
+
+            <!-- 5. TIZIM DIAGNOSTIKASI -->
+            <div style="margin-top: 16px; padding: 12px; background: var(--bg-surface); border-radius: 6px; border: 1px solid var(--border-color);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="font-weight: 600; font-size: 11px; color: var(--gold);">🔧 TIZIM VA VAQT DIAGNOSTIKASI</div>
+                    <div style="display: flex; gap: 6px;">
+                        <button id="btnRunDiagnostics" class="btn btn-sm btn-action">🔍 Tizim</button>
+                        <button id="btnTimeDiagnostics" class="btn btn-sm btn-action" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">🔧 Vaqt Diagnostikasi</button>
+                    </div>
+                </div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px;">
+                    ExtendScript, Host (AE/PR), aktiv timeline, tanlangan klip va AI backend aloqasini tekshiradi.
+                </div>
+                <div id="diagResultsContainer" style="display: none;">
+                    <div id="diagList" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 4px; padding: 8px; margin-bottom: 8px; font-family: monospace; font-size: 11px; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+                        <!-- JS orqali to'ldiriladi -->
+                    </div>
+                    <button id="btnCopyDiagLog" class="btn btn-sm btn-block" style="font-size: 11px;">📋 Diagnostika Logni Nusxalash</button>
+                </div>
+                <div id="timeDiagResultsContainer" style="display: none; margin-top: 8px;">
+                    <div style="font-size: 10px; color: #38bdf8; margin-bottom: 4px; font-weight: 600;">⏱️ Timeline & Klip Vaqt Parametrlari (JSON):</div>
+                    <pre id="timeDiagLogPre" style="background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); border-radius: 4px; padding: 8px; font-family: Consolas, monospace; font-size: 10px; max-height: 220px; overflow: auto; color: #7dd3fc; margin: 0; white-space: pre-wrap;"></pre>
+                    <button id="btnCopyTimeDiagLog" class="btn btn-sm btn-block" style="font-size: 11px; margin-top: 6px;">📋 Vaqt Diagnostika Logni Nusxalash</button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- VAQT LOGI MODAL OYNASI (STT raw vaqtlari vs Timeline vaqtlari) -->
+    <div id="timeLogModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.75); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(2px);">
+        <div style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; width: 92%; max-width: 650px; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 10px 25px rgba(0,0,0,0.7); overflow: hidden;">
+            <div style="padding: 10px 14px; background: var(--bg-darker); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                <div style="font-weight: 600; font-size: 13px; color: #a78bfa; display: flex; align-items: center; gap: 6px;">
+                    <span>⏱️ So'zlar Vaqt Logi (STT Raw vs Timeline Offset)</span>
+                </div>
+                <button id="btnCloseTimeLogModal" type="button" class="btn btn-action" style="padding: 2px 8px; font-size: 12px; border-radius: 4px;">✕</button>
+            </div>
+            <div style="padding: 8px 14px; background: rgba(0,0,0,0.25); font-size: 11px; color: var(--text-secondary); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+                <span id="timeLogSummaryText">Jami so'zlar: 0 ta</span>
+                <button id="btnCopyTimeLogTable" class="btn btn-sm btn-action" style="font-size: 10px; padding: 2px 7px;">📋 Matn ko'rinishida nusxalash</button>
+            </div>
+            <div id="timeLogTableContainer" style="flex: 1; overflow-y: auto; padding: 8px 12px; font-family: monospace; font-size: 11px;">
+                <!-- JavaScript orqali to'ldiriladi -->
+            </div>
+            <div style="padding: 8px 14px; background: var(--bg-darker); border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 10px; color: var(--text-muted);">🟢 Normal | ⚠️ Clamped (Klip chegarasiga qisqargan)</span>
+                <button id="btnCloseTimeLogModalBottom" type="button" class="btn btn-sm" style="padding: 4px 12px;">Yopish</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- QUYI STATUS FOOTER -->
+    <footer class="app-footer">
+        <span id="backendStatusText">Backend tekshirilmoqda...</span>
+        <span>v1.0.0</span>
+    </footer>
+
+    <!-- SKRIPTLAR TARTIBI -->
+    <script src="js/CSInterface.js"></script>
+    <script src="js/uzbekUtils.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/hostBridge.js"></script>
+    <script src="js/presetManager.js"></script>
+    <script src="js/editor.js"></script>
+    <script src="js/beats.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

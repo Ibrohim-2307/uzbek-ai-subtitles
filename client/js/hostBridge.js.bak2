@@ -1,0 +1,565 @@
+function logDebug(msg) {
+    try {
+        if (typeof require !== "undefined") {
+            const fs = require('fs');
+            fs.appendFileSync('d:/anti garavity loyhalar/plogin/extension_debug.log', `[JS ${new Date().toISOString()}] ${msg}\n`, 'utf8');
+        }
+    } catch (e) {}
+    console.log("[HostBridge]", msg);
+}
+
+const HostBridge = {
+    cs: null,
+    hostApp: "UNKNOWN", // "AEFT" yoki "PPRO"
+    _scriptLoaded: false,
+
+    init() {
+        this.cs = new CSInterface();
+        const hostEnv = this.cs.getHostEnvironment();
+        if (hostEnv) {
+            const appId = hostEnv.appId;
+            if (appId.indexOf("AEFT") !== -1) {
+                this.hostApp = "AEFT";
+            } else if (appId.indexOf("PPRO") !== -1) {
+                this.hostApp = "PPRO";
+            } else {
+                this.hostApp = appId;
+            }
+        }
+        logDebug("Aniqlangan dastur: " + this.hostApp);
+
+        // ExtendScript faylini yuklash
+        this.loadExtendScript();
+    },
+
+    loadExtendScript() {
+        return new Promise((resolve) => {
+            logDebug("loadExtendScript boshlandi");
+            if (!this.cs) this.cs = new CSInterface();
+
+            // 1. Agar ExtendScript funksiyalari allaqachon mavjud bo'lsa
+            this.cs.evalScript("typeof ppro_getSelectedClipAudioPath === 'function'", (hasFunc) => {
+                if (hasFunc === "true" || hasFunc === true) {
+                    logDebug("ExtendScript funksiyalari allaqachon mavjud!");
+                    this._scriptLoaded = true;
+                    resolve(true);
+                    return;
+                }
+
+                // 2. ExtendScript orqali faylni bevosita $.evalFile(new File(...)) bilan yuklash
+                const candidatePaths = [
+                    "C:/Users/baxru/AppData/Roaming/Adobe/CEP/extensions/com.uzbek.subtitles/host/shared.jsx",
+                    "d:/anti garavity loyhalar/plogin/host/shared.jsx"
+                ];
+                try {
+                    let extPath = decodeURI(this.cs.getSystemPath("extension") || "");
+                    extPath = extPath.replace(/^file:\/\/\//i, "").replace(/^file:\/\//i, "").replace(/\\/g, "/");
+                    if (extPath) {
+                        if (!extPath.endsWith("/")) extPath += "/";
+                        candidatePaths.unshift(extPath + "host/shared.jsx");
+                    }
+                } catch (pErr) {}
+
+                const pathsJson = JSON.stringify(candidatePaths);
+                const loadCode = "(function() { " +
+                    "var pList = " + pathsJson + "; " +
+                    "for (var i = 0; i < pList.length; i++) { " +
+                    "    var f = new File(pList[i]); " +
+                    "    if (f.exists) { " +
+                    "        try { " +
+                    "            $.evalFile(f); " +
+                    "            if (typeof ppro_getSelectedClipAudioPath === 'function') return 'LOADED_OK: ' + pList[i]; " +
+                    "        } catch (eF) { " +
+                    "            return 'EVALFILE_ERR: ' + eF.toString() + ' (line: ' + (eF.line || 0) + ')'; " +
+                    "        } " +
+                    "    } " +
+                    "} " +
+                    "return 'FILE_NOT_FOUND'; " +
+                    "})();";
+
+                this.cs.evalScript(loadCode, (evalRes) => {
+                    logDebug("loadExtendScript natijasi: " + String(evalRes));
+                    if (evalRes && String(evalRes).indexOf("LOADED_OK") !== -1) {
+                        this._scriptLoaded = true;
+                        resolve(true);
+                    } else {
+                        // Agar $.evalFile biror sabab bilan o'tmasa, Node.js orqali faylni o'qib yuboramiz
+                        if (typeof require !== "undefined") {
+                            try {
+                                const fs = require('fs');
+                                for (let p of candidatePaths) {
+                                    if (fs.existsSync(p)) {
+                                        const code = fs.readFileSync(p, 'utf8');
+                                        this.cs.evalScript(code, (directRes) => {
+                                            logDebug("direct evalScript natijasi: " + String(directRes));
+                                            this._scriptLoaded = true;
+                                            resolve(true);
+                                        });
+                                        return;
+                                    }
+                                }
+                            } catch (nErr) {
+                                logDebug("Node.js eval xatosi: " + nErr);
+                            }
+                        }
+                        this._scriptLoaded = true;
+                        resolve(false);
+                    }
+                });
+            });
+        });
+    },
+
+    /**
+     * ExtendScript kodini bajarib, natijani Promise ko'rinishida olish
+     */
+    async eval(script) {
+        if (!this.cs) {
+            this.init();
+        }
+
+        if (!this._scriptLoaded) {
+            await this.loadExtendScript();
+        }
+
+        return new Promise((resolve) => {
+            logDebug("ExtendScript so'rovi: " + script);
+
+            // Havfsiz wrapper: ExtendScript'da JSON bo'lmasa yoki xato yuz bersa ham hech qachon EvalScript error bo'lmaydi
+            const wrappedScript = "(function() { try { " +
+                "var _res = " + script + "; " +
+                "if (_res === undefined || _res === null) return '{\"ok\":true,\"success\":true}'; " +
+                "if (typeof _res === 'string') return _res; " +
+                "if (typeof JSON !== 'undefined' && JSON.stringify) return JSON.stringify(_res); " +
+                "return String(_res); " +
+                "} catch (_e) { " +
+                "var _cleanMsg = String(_e.message || _e).replace(/[\\r\\n\\t\\\"\\\\]/g, ' '); " +
+                "return '{\"ok\":false,\"success\":false,\"error\":\"' + _cleanMsg + '\",\"line\":' + (_e.line || 0) + '}'; " +
+                "} })();";
+
+            this.cs.evalScript(wrappedScript, (result) => {
+                logDebug("ExtendScript javobi: " + String(result));
+
+                if (result === "EvalScript error." || result === undefined || result === null) {
+                    logDebug("EvalScript error qaytdi!");
+                    resolve({ success: false, error: "ExtendScript bajarilmadi (EvalScript error)" });
+                    return;
+                }
+
+                try {
+                    let parsed = JSON.parse(result);
+                    if (typeof parsed === "string") {
+                        try { parsed = JSON.parse(parsed); } catch (e2) {}
+                    }
+                    resolve(parsed);
+                } catch (e) {
+                    try {
+                        const cleaned = String(result).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+                        let parsed2 = JSON.parse(cleaned);
+                        if (typeof parsed2 === "string") {
+                            try { parsed2 = JSON.parse(parsed2); } catch (e3) {}
+                        }
+                        resolve(parsed2);
+                    } catch (e4) {
+                        logDebug("JSON parse qilib bo'lmadi, xom matn: " + String(result));
+                        resolve({ success: false, error: String(result) });
+                    }
+                }
+            });
+        });
+    },
+
+    /**
+     * Aktiv kompozitsiya (AE) yoki ketma-ketlik (PPro) ma'lumotini olish
+     */
+    async getTimelineInfo() {
+        if (this.hostApp === "AEFT") {
+            return await this.eval("ae_getCompInfo()");
+        } else if (this.hostApp === "PPRO") {
+            return await this.eval("ppro_getSequenceInfo()");
+        }
+        return { exists: false, message: "Dastur aniqlanmadi (Brauzer rejimi)" };
+    },
+
+    /**
+     * Playhead (CTI) ni ko'rsatilgan vaqtga sakratish
+     */
+    async setPlayhead(seconds) {
+        if (this.hostApp === "AEFT") {
+            return await this.eval(`ae_setPlayhead(${seconds})`);
+        } else if (this.hostApp === "PPRO") {
+            return await this.eval(`ppro_setPlayhead(${seconds})`);
+        }
+        return { status: "simulated" };
+    },
+
+    /**
+     * Tanlangan qatlam yoki klipning audio/video manba fayli yo'lini olish
+     */
+    async getSelectedMediaSource() {
+        if (this.hostApp === "AEFT") {
+            return await this.eval("ae_getSelectedLayerMediaPath()");
+        } else if (this.hostApp === "PPRO") {
+            return await this.eval("ppro_getSelectedClipAudioPath()");
+        }
+        return { success: false, message: "Host dastur aniqlanmadi" };
+    },
+
+    /**
+     * Subtitrlarni After Effects yoki Premiere Pro timeline'iga joylashtirish
+     */
+    async insertSubtitles(segments, styleOptions, timelineOffset = 0.0) {
+        const off = parseFloat(timelineOffset) || 0.0;
+        const leadIn = (styleOptions && typeof styleOptions.leadIn === "number") ? styleOptions.leadIn : 0.0;
+
+        // Har bir segmentning boshlanish va tugash vaqtlarini aniqlash (faqat qo'shimcha qo'lda kiritilgan offset bo'lsagina siljitamiz)
+        let timelineSegments = (off !== 0) ? segments.map((seg, idx) => ({
+            ...seg,
+            id: idx + 1,
+            start: Math.max(0, Number((seg.start + off).toFixed(3))),
+            end: Math.max(0.1, Number((seg.end + off).toFixed(3))),
+            words: (seg.words || []).map(w => ({
+                ...w,
+                start: Math.max(0, Number((w.start + off).toFixed(3))),
+                end: Math.max(0.1, Number((w.end + off).toFixed(3)))
+            }))
+        })) : segments;
+
+        // Qat'iy ko'pi bilan 1 yoki 2 qator bo'lishini ta'minlash (hech qachon 3-4 qator bo'lmaydi)
+        function enforceTwoLines(segs) {
+            const res = [];
+            let gId = 1;
+            for (let i = 0; i < segs.length; i++) {
+                const s = segs[i];
+                let ws = (s.words && s.words.length > 0) ? [...s.words] : [];
+                if (ws.length === 0) {
+                    const raw = (s.text || "").replace(/[\r\n]+/g, " ").trim().split(/\s+/).filter(Boolean);
+                    if (raw.length === 0) continue;
+                    const d = Math.max(0.4, (s.end || (s.start + 1.0)) - s.start);
+                    const dw = d / raw.length;
+                    ws = raw.map((w, idx) => ({
+                        word: w,
+                        start: Number((s.start + idx * dw).toFixed(3)),
+                        end: Number((s.start + (idx + 1) * dw).toFixed(3)),
+                        score: 1.0
+                    }));
+                }
+
+                function fmt2Lines(txt) {
+                    const words = (txt || "").replace(/[\r\n]+/g, " ").trim().split(/\s+/).filter(Boolean);
+                    if (words.length <= 1) return words.join(" ");
+                    if (words.length <= 3 && txt.length <= 24) return words.join(" ");
+                    const half = Math.floor(words.length / 2);
+                    return words.slice(0, half).join(" ") + "\n" + words.slice(half).join(" ");
+                }
+
+                const full = ws.map(w => w.word).join(" ");
+                if (ws.length <= 4 && full.length <= 28) {
+                    res.push({
+                        ...s,
+                        id: gId++,
+                        start: ws[0].start,
+                        end: ws[ws.length - 1].end,
+                        text: fmt2Lines(full),
+                        words: ws
+                    });
+                    continue;
+                }
+
+                const chunks = [];
+                let cChunk = [];
+                let cLen = 0;
+                for (let w = 0; w < ws.length; w++) {
+                    const wItem = ws[w];
+                    const wLen = (wItem.word || "").length;
+                    if (cChunk.length > 0 && (cChunk.length >= 4 || cLen + 1 + wLen > 28)) {
+                        chunks.push(cChunk);
+                        cChunk = [wItem];
+                        cLen = wLen;
+                    } else {
+                        cChunk.push(wItem);
+                        cLen += (cChunk.length > 1 ? 1 : 0) + wLen;
+                    }
+                }
+                if (cChunk.length > 0) chunks.push(cChunk);
+
+                for (let c = 0; c < chunks.length; c++) {
+                    const ch = chunks[c];
+                    const cTxt = ch.map(item => item.word).join(" ");
+                    let cStart = ch[0].start;
+                    let cEnd = ch[ch.length - 1].end;
+                    if (cEnd <= cStart) cEnd = Number((cStart + 0.35).toFixed(3));
+                    res.push({
+                        ...s,
+                        id: gId++,
+                        start: Number(cStart.toFixed(3)),
+                        end: Number(cEnd.toFixed(3)),
+                        text: fmt2Lines(cTxt),
+                        words: ch
+                    });
+                }
+            }
+            return res;
+        }
+
+        timelineSegments = enforceTwoLines(timelineSegments);
+
+        if (this.hostApp === "AEFT") {
+            const payload = JSON.stringify({
+                segments: timelineSegments,
+                style: styleOptions,
+                timelineOffset: 0.0,
+                leadIn: leadIn
+            });
+            const encoded = encodeURIComponent(payload);
+            return await this.eval(`ae_createSubtitles("${encoded}")`);
+        } else if (this.hostApp === "PPRO") {
+            // Premiere Pro: Agar MOGRT tanlangan bo'lsa yoki mavjud bo'lsa, to'g'ridan-to'g'ri Video Trekka (V2) joylaymiz
+            let chosenMogrt = (styleOptions && styleOptions.mogrtPath) ? styleOptions.mogrtPath : "";
+
+            // Agar alohida tanlanmagan bo'lsa, PresetManager'dan tekshirish
+            if (!chosenMogrt && window.PresetManager) {
+                const activeP = window.PresetManager.getActivePreset();
+                if (activeP && activeP.mogrtPath) {
+                    chosenMogrt = activeP.mogrtPath;
+                } else if (window.PresetManager.localTemplates && window.PresetManager.localTemplates.length > 0) {
+                    // C: yoki D: diskdagi standart caption/title shablonini topish
+                    const defMgt = window.PresetManager.localTemplates.find(t => 
+                        t.ext === "mogrt" && (
+                            t.name.toLowerCase().includes("caption") ||
+                            t.name.toLowerCase().includes("hormozi") ||
+                            t.name.toLowerCase().includes("smooth") ||
+                            t.name.toLowerCase().includes("title")
+                        )
+                    );
+                    if (defMgt) chosenMogrt = defMgt.path;
+                }
+            }
+
+            // SO'ZMA-SO'Z REJIMI (PREMIERE PRO UCHUN BO'LAKLASH):
+            if (styleOptions && styleOptions.wordByWord && styleOptions.wordMode) {
+                const wMode = styleOptions.wordMode;
+                if (wMode === "single") {
+                    const singleWordSegs = [];
+                    let wGlobalId = 1;
+                    for (let i = 0; i < timelineSegments.length; i++) {
+                        const s = timelineSegments[i];
+                        if (s.words && s.words.length > 0) {
+                            for (let w = 0; w < s.words.length; w++) {
+                                const wo = s.words[w];
+                                singleWordSegs.push({
+                                    ...s,
+                                    id: wGlobalId++,
+                                    start: wo.start,
+                                    end: wo.end,
+                                    text: wo.word,
+                                    words: [wo]
+                                });
+                            }
+                        } else {
+                            singleWordSegs.push(s);
+                        }
+                    }
+                    timelineSegments = singleWordSegs;
+                } else if (wMode === "accumulate") {
+                    const accumSegs = [];
+                    let aGlobalId = 1;
+                    for (let i = 0; i < timelineSegments.length; i++) {
+                        const s = timelineSegments[i];
+                        if (s.words && s.words.length > 0) {
+                            for (let w = 0; w < s.words.length; w++) {
+                                const wo = s.words[w];
+                                const nextW = s.words[w + 1];
+                                const aStart = wo.start;
+                                const aEnd = nextW ? nextW.start : s.end;
+                                const aText = s.words.slice(0, w + 1).map(item => item.word).join(" ");
+                                accumSegs.push({
+                                    ...s,
+                                    id: aGlobalId++,
+                                    start: aStart,
+                                    end: (aEnd > aStart) ? aEnd : (aStart + 0.35),
+                                    text: aText,
+                                    words: s.words.slice(0, w + 1)
+                                });
+                            }
+                        } else {
+                            accumSegs.push(s);
+                        }
+                    }
+                    timelineSegments = accumSegs;
+                }
+            }
+
+            const hasAnyMogrt = !!chosenMogrt || timelineSegments.some(s => !!s.mogrtPath);
+
+            if (hasAnyMogrt) {
+                const payload = JSON.stringify({
+                    mogrtPath: chosenMogrt,
+                    segments: timelineSegments,
+                    timelineOffset: 0.0,
+                    leadIn: leadIn
+                });
+                const encoded = encodeURIComponent(payload);
+                return await this.eval(`ppro_insertMogrtSubtitles("${encoded}")`);
+            } else {
+                // Standart Video Trek / Caption Track (SRT import orqali)
+                const wModeArg = (styleOptions && styleOptions.wordByWord) ? styleOptions.wordMode : null;
+                const hColorArg = (styleOptions && styleOptions.highlightColor) ? styleOptions.highlightColor : "#ffe600";
+                const tempSrtRes = await window.SubtitleAPI.exportSRT(timelineSegments, null, wModeArg, hColorArg);
+                let tempFilePath = (tempSrtRes.file_path || "").replace(/\\/g, "/");
+
+                if (!tempFilePath) {
+                    const srtContent = tempSrtRes.content;
+                    if (window.cep && window.cep.fs) {
+                        const tempDir = this.cs.getSystemPath("userData") || "C:/temp";
+                        tempFilePath = `${tempDir}/temp_uz_subtitles.srt`.replace(/\\/g, "/");
+                        window.cep.fs.writeFile(tempFilePath, srtContent);
+                    } else {
+                        try {
+                            const fs = require('fs');
+                            const os = require('os');
+                            const path = require('path');
+                            tempFilePath = path.join(os.tmpdir(), "temp_uz_subtitles.srt").replace(/\\/g, "/");
+                            fs.writeFileSync(tempFilePath, srtContent, 'utf-8');
+                        } catch (e) {
+                            tempFilePath = "C:/temp/temp_uz_subtitles.srt";
+                        }
+                    }
+                }
+
+                if (typeof require !== "undefined" && tempSrtRes.content) {
+                    try {
+                        const fs = require('fs');
+                        const os = require('os');
+                        const path = require('path');
+                        const dlPath = path.join(os.homedir(), "Downloads", "subtitrlar.srt");
+                        fs.writeFileSync(dlPath, tempSrtRes.content, 'utf-8');
+                    } catch (e) {}
+                }
+
+                // SRT ichida vaqtlar allaqachon aniq, shuning uchun offset = 0.0 uzatiladi
+                return await this.eval(`ppro_insertSubtitlesViaSRT("${tempFilePath}", 0.0)`);
+            }
+        }
+
+        return { success: false, message: "Host dastur aniqlanmadi" };
+    },
+
+    /**
+     * Bitta MOGRT animatsiyasini to'g'ridan-to'g'ri playhead (CTI) turgan joyga joylashtirish (AEJuice kabi)
+     */
+    async insertSingleMogrtAtPlayhead(mogrtPath, customText = "O'zbekcha AI Subtitr") {
+        if (!mogrtPath) return { success: false, message: "MOGRT yo'li berilmadi" };
+        const cleanPath = mogrtPath.replace(/\\/g, "/");
+        const cleanText = String(customText).replace(/["\r\n\t]/g, " ");
+        if (this.hostApp === "PPRO") {
+            return await this.eval(`ppro_insertSingleMogrtAtPlayhead("${cleanPath}", "${cleanText}")`);
+        }
+        return { success: false, message: "Bu funksiya faqat Premiere Pro uchun ishlaydi" };
+    },
+
+    /**
+     * After Effects'da tanlangan matn qatlamidan stil parametrlarini o'qib olish
+     */
+    async extractSelectedTextStyle() {
+        if (this.hostApp === "AEFT") {
+            return await this.eval("ae_extractSelectedTextStyle()");
+        }
+        return { success: false, message: "Bu funksiya faqat After Effects uchun amal qiladi" };
+    },
+
+    /**
+     * Saqlangan stilni tanlangan qatlamlarga qo'llash
+     */
+    async applyStyleToLayers(styleObj) {
+        if (this.hostApp === "AEFT") {
+            const encoded = encodeURIComponent(JSON.stringify(styleObj));
+            return await this.eval(`ae_applyStyleToLayers("${encoded}")`);
+        }
+        return { success: false, message: "Bu funksiya faqat After Effects uchun amal qiladi" };
+    },
+
+    /**
+     * Tizim to'liq diagnostikasi (Host, ExtendScript, Sequence/Comp, Backend, Ruxsatlar)
+     */
+    async runDiagnostics() {
+        const diagReport = {
+            timestamp: new Date().toLocaleString(),
+            hostApp: this.hostApp,
+            extendScript: null,
+            backend: null,
+            cep: {
+                hasCSInterface: !!this.cs,
+                hasNode: typeof require !== "undefined",
+                hasCepFs: !!(window.cep && window.cep.fs)
+            }
+        };
+
+        // 1. ExtendScript tekshiruvi
+        try {
+            const extRes = await this.eval("host_runDiagnostics()");
+            diagReport.extendScript = extRes;
+        } catch (e) {
+            diagReport.extendScript = { ok: false, error: e.message || String(e) };
+        }
+
+        // 2. Backend STT tekshiruvi
+        try {
+            const backendRes = await window.SubtitleAPI.checkHealth();
+            diagReport.backend = backendRes;
+        } catch (e) {
+            diagReport.backend = { online: false, error: e.message || String(e) };
+        }
+
+        return diagReport;
+    },
+
+    /**
+     * Timeline'ga CapCut uslubidagi Beat va Ritm markerlarini joylashtirish
+     */
+    async createBeatMarkers(beatsData, clearExisting = false) {
+        const payload = JSON.stringify({
+            beats: beatsData.beats || [],
+            bpm: beatsData.bpm || 120,
+            clearExisting: clearExisting
+        });
+        const encoded = encodeURIComponent(payload);
+
+        if (this.hostApp === "PPRO") {
+            return await this.eval(`ppro_createBeatMarkers("${encoded}")`);
+        } else if (this.hostApp === "AEFT") {
+            return await this.eval(`ae_createBeatMarkers("${encoded}")`);
+        } else {
+            return {
+                success: false,
+                message: "Adobe Premiere Pro yoki After Effects dasturi aniqlanmadi (Web rejimida)."
+            };
+        }
+    },
+
+    /**
+     * Timeline'dagi videoni musiqa ritmi zarbalarida avtomatik pichoq bilan kesish (Auto Cut / Razor)
+     */
+    async autoCutAtBeats(beatsData, trackIndex = 0) {
+        const payload = JSON.stringify({
+            beats: beatsData.beats || [],
+            bpm: beatsData.bpm || 120,
+            trackIndex: trackIndex
+        });
+        const encoded = encodeURIComponent(payload);
+
+        if (this.hostApp === "PPRO") {
+            return await this.eval(`ppro_autoCutAtBeats("${encoded}")`);
+        } else if (this.hostApp === "AEFT") {
+            return await this.eval(`ae_createBeatMarkers("${encoded}")`);
+        } else {
+            return {
+                success: false,
+                message: "Adobe Premiere Pro yoki After Effects dasturi aniqlanmadi (Web rejimida)."
+            };
+        }
+    }
+};
+
+window.HostBridge = HostBridge;
+

@@ -1,0 +1,1284 @@
+/**
+ * O'zbekcha AI Subtitr - Asosiy UI Boshqaruvchisi (app.js)
+ * Barcha modullarni bog'laydi, foydalanuvchi harakatlarini boshqaradi.
+ */
+
+document.addEventListener("DOMContentLoaded", () => {
+    // 1. Host Bridge va asosiy UI modullarini darhol, bir zumda ishga tushirish
+    try { window.HostBridge.init(); } catch (e) { console.warn(e); }
+    try { initTabs(); } catch (e) { console.warn(e); }
+    try { initHostUI(); } catch (e) { console.warn(e); }
+    try { initTranscribeSection(); } catch (e) { console.warn(e); }
+    try { initEditorSection(); } catch (e) { console.warn(e); }
+    try { initPresetsSection(); } catch (e) { console.warn(e); }
+    try { initSettingsSection(); } catch (e) { console.warn(e); }
+
+    // 2. Presetlar va mahalliy shablonlarni orqa fonda asinxron yuklash (UI ni qotirmasdan)
+    window.PresetManager.init().then(() => {
+        renderPresetCards();
+    }).catch(err => console.warn("PresetManager init error:", err));
+
+    // 3. Backend holatini tekshirish
+    checkBackendStatus();
+    setInterval(checkBackendStatus, 10000);
+});
+
+// ==================== TABS (BO'LIMLAR) ====================
+
+function initTabs() {
+    const tabButtons = document.querySelectorAll(".tab-btn");
+    const tabContents = document.querySelectorAll(".tab-content");
+
+    tabButtons.forEach(btn => {
+        btn.addEventListener("click", () => {
+            const targetTab = btn.getAttribute("data-tab");
+
+            tabButtons.forEach(b => b.classList.remove("active"));
+            tabContents.forEach(c => c.classList.remove("active"));
+
+            btn.classList.add("active");
+            const targetContent = document.getElementById(targetTab);
+            if (targetContent) targetContent.classList.add("active");
+
+            // Agar stillar bo'limiga o'tsa, presetlarni qayta chizish
+            if (targetTab === "tab-presets") {
+                renderPresetCards();
+            } else if (targetTab === "tab-transcribe") {
+                // Transkripsiya bo'limiga qaytganda timeline holatini yangilab qo'yish
+                initHostUI();
+            } else if (targetTab === "tab-beats") {
+                // Ritm va beatlar bo'limiga o'tganda to'lqinni chizish
+                if (window.BeatManager) {
+                    setTimeout(() => window.BeatManager.renderWaveform(), 50);
+                }
+            }
+        });
+    });
+}
+
+function switchTab(tabId) {
+    const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    if (btn) btn.click();
+}
+window.switchTab = switchTab;
+
+// ==================== HOST DASTUR (AE / PPRO) ====================
+
+async function initHostUI() {
+    const hostBadge = document.getElementById("hostBadge");
+    const timelineInfoEl = document.getElementById("timelineInfo");
+
+    const hostApp = window.HostBridge.hostApp;
+    if (hostBadge) {
+        if (hostApp === "AEFT") {
+            hostBadge.textContent = "After Effects";
+            hostBadge.className = "host-badge ae";
+        } else if (hostApp === "PPRO") {
+            hostBadge.textContent = "Premiere Pro";
+            hostBadge.className = "host-badge ppro";
+        } else {
+            hostBadge.textContent = "Brauzer / Standalone";
+            hostBadge.className = "host-badge web";
+        }
+    }
+
+    try {
+        const info = await window.HostBridge.getTimelineInfo();
+        if (info && info.exists && timelineInfoEl) {
+            const fpsText = info.frameRate ? `${Number(info.frameRate).toFixed(2)} fps` : "";
+            timelineInfoEl.textContent = `Aktiv: ${info.name}${fpsText ? " (" + fpsText + ")" : ""}`;
+            timelineInfoEl.style.color = "#4ade80";
+        } else if (timelineInfoEl) {
+            timelineInfoEl.textContent = (info && info.message) ? info.message : "Timeline tayyor (Klipni 'Tanlash' orqali oling)";
+            timelineInfoEl.style.color = "var(--text-muted)";
+        }
+    } catch (e) {
+        if (timelineInfoEl) {
+            timelineInfoEl.textContent = "Timeline tayyor (Klipni 'Tanlash' orqali oling)";
+            timelineInfoEl.style.color = "var(--text-muted)";
+        }
+    }
+}
+
+// ==================== BACKEND HOLATI ====================
+
+async function checkBackendStatus() {
+    const statusDot = document.getElementById("backendStatusDot");
+    const statusText = document.getElementById("backendStatusText");
+    const res = await window.SubtitleAPI.checkHealth();
+
+    if (res.online) {
+        if (statusDot) statusDot.className = "status-dot online";
+        if (statusText) {
+            const gpuText = res.gpu_available ? `GPU: ${res.device_name}` : "CPU";
+            statusText.textContent = `Backend faol (${gpuText})`;
+            statusText.title = `Model: ${res.model_size}, Provayder: ${res.active_provider}`;
+        }
+    } else {
+        if (statusDot) statusDot.className = "status-dot offline";
+        if (statusText) statusText.textContent = "Backend ulanmagan (start_backend.bat ni ishga tushiring)";
+    }
+}
+
+// Mahalliy fayl yo'lini qidirib aniqlash yordamchisi (Node.js orqali)
+function resolvePhysicalMediaPath(filePath) {
+    if (!filePath) return filePath;
+    if (typeof require !== "undefined") {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            let clean = String(filePath).replace(/\s*\[[VA0-9\s]+\]\s*$/i, "").trim();
+            if (fs.existsSync(clean)) return clean.replace(/\\/g, '/');
+
+            const baseName = path.basename(clean);
+            const searchDirs = [
+                "C:/Users/baxru/Downloads/Telegram Desktop",
+                "C:/Users/baxru/Downloads",
+                "D:/mantaj/mantaj/tajriba uchun",
+                "D:/mantaj/mantaj",
+                "D:/mantaj"
+            ];
+            for (const dir of searchDirs) {
+                const candidate = path.join(dir, baseName);
+                if (fs.existsSync(candidate)) {
+                    return candidate.replace(/\\/g, '/');
+                }
+                if (!baseName.includes(".")) {
+                    const candMp4 = path.join(dir, baseName + ".mp4");
+                    if (fs.existsSync(candMp4)) return candMp4.replace(/\\/g, '/');
+                }
+            }
+        } catch (e) {}
+    }
+    return filePath;
+}
+
+// ==================== TRANSKRIPSIYA BO'LIMI ====================
+
+function initTranscribeSection() {
+    const btnSelectMedia = document.getElementById("btnSelectMedia");
+    const mediaSourceInput = document.getElementById("mediaSourceInput");
+    const fileUploadInput = document.getElementById("fileUploadInput");
+    const btnStartTranscribe = document.getElementById("btnStartTranscribe");
+    const progressContainer = document.getElementById("progressContainer");
+    const progressStatus = document.getElementById("progressStatus");
+
+    // Timeline'dan manbani olish
+    if (btnSelectMedia) {
+        btnSelectMedia.addEventListener("click", async () => {
+            const res = await window.HostBridge.getSelectedMediaSource();
+            const timelineInfoEl = document.getElementById("timelineInfo");
+            const offsetEl = document.getElementById("timelineOffsetInput");
+
+            if (res.success && (res.filePath || (res.clips && res.clips.length > 0))) {
+                const clips = (res.clips && res.clips.length > 0) ? res.clips : [res];
+                clips.forEach(c => {
+                    if (c.filePath) c.filePath = resolvePhysicalMediaPath(c.filePath);
+                });
+                window.selectedClips = clips;
+
+                if (clips.length > 1) {
+                    let totalSec = 0;
+                    clips.forEach(c => totalSec += (c.duration || 0));
+                    mediaSourceInput.value = `${clips.length} ta kesilgan klip (${totalSec.toFixed(1)}s)`;
+                    delete mediaSourceInput.dataset.isFile;
+                    if (offsetEl) offsetEl.value = Number(clips[0].start.toFixed(2));
+                    if (timelineInfoEl) {
+                        timelineInfoEl.textContent = `🎯 ${clips.length} ta qirqilgan klip tanlandi! (Jami: ${totalSec.toFixed(1)}s)`;
+                        timelineInfoEl.style.color = "#4ade80";
+                    }
+                } else {
+                    const c = clips[0];
+                    mediaSourceInput.value = c.filePath;
+                    delete mediaSourceInput.dataset.isFile;
+                    const off = (typeof c.start === "number") ? c.start : (c.offset || 0);
+                    if (offsetEl) offsetEl.value = Number(off.toFixed(2));
+                    if (timelineInfoEl) {
+                        const fileName = c.name || c.filePath.split(/[\/\\]/).pop();
+                        const durText = c.duration ? `, Qirqilgan: ${c.duration.toFixed(1)}s` : "";
+                        const startText = (typeof c.start === "number") ? `Boshlanishi: ${c.start.toFixed(1)}s` : "";
+                        timelineInfoEl.textContent = `🎯 ${fileName} (${startText}${durText})`;
+                        timelineInfoEl.style.color = "#4ade80";
+                    }
+                }
+            } else {
+                if (timelineInfoEl) {
+                    timelineInfoEl.textContent = `⚠️ ${res.error || res.message || "Timeline'da klip topilmadi. Faylni yuklang."}`;
+                    timelineInfoEl.style.color = "#f87171";
+                }
+            }
+        });
+
+        // Boshlang'ich yuklanganda ham avtomatik timeline'dan klipni olish
+        setTimeout(async () => {
+            if (!mediaSourceInput.value) {
+                const res = await window.HostBridge.getSelectedMediaSource();
+                const timelineInfoEl = document.getElementById("timelineInfo");
+                const offsetEl = document.getElementById("timelineOffsetInput");
+
+                if (res.success && (res.filePath || (res.clips && res.clips.length > 0))) {
+                    const clips = (res.clips && res.clips.length > 0) ? res.clips : [res];
+                    clips.forEach(c => {
+                        if (c.filePath) c.filePath = resolvePhysicalMediaPath(c.filePath);
+                    });
+                    window.selectedClips = clips;
+
+                    if (clips.length > 1) {
+                        let totalSec = 0;
+                        clips.forEach(c => totalSec += (c.duration || 0));
+                        mediaSourceInput.value = `${clips.length} ta kesilgan klip (${totalSec.toFixed(1)}s)`;
+                        delete mediaSourceInput.dataset.isFile;
+                        if (offsetEl) offsetEl.value = Number(clips[0].start.toFixed(2));
+                        if (timelineInfoEl) {
+                            timelineInfoEl.textContent = `🎯 ${clips.length} ta qirqilgan klip tanlandi! (Jami: ${totalSec.toFixed(1)}s)`;
+                            timelineInfoEl.style.color = "#4ade80";
+                        }
+                    } else {
+                        const c = clips[0];
+                        mediaSourceInput.value = c.filePath;
+                        delete mediaSourceInput.dataset.isFile;
+                        const off = (typeof c.start === "number") ? c.start : (c.offset || 0);
+                        if (offsetEl) offsetEl.value = Number(off.toFixed(2));
+                        if (timelineInfoEl) {
+                            const fileName = c.name || c.filePath.split(/[\/\\]/).pop();
+                            const durText = c.duration ? `, Qirqilgan: ${c.duration.toFixed(1)}s` : "";
+                            const startText = (typeof c.start === "number") ? `Boshlanishi: ${c.start.toFixed(1)}s` : "";
+                            timelineInfoEl.textContent = `🎯 ${fileName} (${startText}${durText})`;
+                            timelineInfoEl.style.color = "#4ade80";
+                        }
+                    }
+                }
+            }
+        }, 1000);
+    }
+
+    // Mahalliy fayl tanlash
+    if (fileUploadInput) {
+        fileUploadInput.addEventListener("change", (e) => {
+            if (e.target.files.length > 0) {
+                const f = e.target.files[0];
+                mediaSourceInput.value = f.name;
+                mediaSourceInput.dataset.isFile = "true";
+                if (f.path) {
+                    mediaSourceInput.dataset.actualPath = f.path;
+                }
+                window.selectedClips = [{ filePath: f.path || f.name, file: f, inPoint: null, outPoint: null, duration: null, start: 0.0 }];
+                const timelineInfoEl = document.getElementById("timelineInfo");
+                if (timelineInfoEl) {
+                    timelineInfoEl.textContent = `📁 Fayl tanlandi: ${f.name}`;
+                    timelineInfoEl.style.color = "#4ade80";
+                }
+            }
+        });
+    }
+
+    // Transkripsiyani boshlash
+    if (btnStartTranscribe) {
+        btnStartTranscribe.addEventListener("click", async () => {
+            const directPath = mediaSourceInput.dataset.actualPath || mediaSourceInput.value.trim();
+            const hasUploadFile = fileUploadInput.files && fileUploadInput.files.length > 0;
+
+            let clipsToProcess = (window.selectedClips && window.selectedClips.length > 0) ? window.selectedClips : null;
+            if (!clipsToProcess) {
+                if (hasUploadFile) {
+                    clipsToProcess = [{ file: fileUploadInput.files[0], inPoint: null, outPoint: null, duration: null, start: 0.0 }];
+                } else if (directPath) {
+                    clipsToProcess = [{ filePath: directPath, inPoint: null, outPoint: null, duration: null, start: 0.0 }];
+                } else {
+                    // Foydalanuvchi "Tanlash" tugmasini bosmagan bo'lsa ham, timeline'dan avtomatik aniqlash
+                    if (progressContainer) progressContainer.style.display = "block";
+                    if (progressStatus) progressStatus.textContent = "Timeline'dagi klip avtomatik aniqlanmoqda...";
+                    try {
+                        const autoRes = await window.HostBridge.getSelectedMediaSource();
+                        if (autoRes && autoRes.success && (autoRes.filePath || (autoRes.clips && autoRes.clips.length > 0))) {
+                            clipsToProcess = (autoRes.clips && autoRes.clips.length > 0) ? autoRes.clips : [autoRes];
+                            window.selectedClips = clipsToProcess;
+                            const first = clipsToProcess[0];
+                            if (mediaSourceInput) {
+                                mediaSourceInput.value = first.filePath || first.name || "Timeline klipi";
+                            }
+                        }
+                    } catch (eAuto) {}
+                }
+            }
+
+            if (clipsToProcess && clipsToProcess.length > 0) {
+                clipsToProcess.forEach(c => {
+                    if (c.filePath) c.filePath = resolvePhysicalMediaPath(c.filePath);
+                });
+            }
+
+            if (!clipsToProcess || clipsToProcess.length === 0) {
+                if (progressContainer) progressContainer.style.display = "none";
+                alert("Timeline'da klip topilmadi!\nIltimos, Premiere Pro timeline'ida videoni bosing (belgilang) yoki 'Choose File' orqali faylni tanlang.");
+                return;
+            }
+
+            btnStartTranscribe.disabled = true;
+            if (progressContainer) progressContainer.style.display = "block";
+            if (progressStatus) progressStatus.textContent = "Audio tayyorlanmoqda va AI modelga yuborilmoqda...";
+
+            // Yangi video transkripsiyasi boshlanganda, eski subtitrlar chalkashtirmasligi uchun tozalash
+            if (window.SubtitleEditor) {
+                window.SubtitleEditor.clear(false);
+            }
+
+            try {
+                const providerSelect = document.getElementById("transcribeProviderSelect");
+                const scriptSelect = document.getElementById("transcribeScriptSelect");
+                const numToWordCheck = document.getElementById("checkNumbersToWords");
+                const provider = providerSelect ? providerSelect.value : "gemini";
+                const script = scriptSelect ? scriptSelect.value : "latin";
+                const convertNumbers = numToWordCheck ? numToWordCheck.checked : false;
+
+                const allSegments = [];
+                let globalSegId = 1;
+
+                for (let cIdx = 0; cIdx < clipsToProcess.length; cIdx++) {
+                    const c = clipsToProcess[cIdx];
+                    if (progressStatus) {
+                        if (clipsToProcess.length > 1) {
+                            progressStatus.textContent = `Klip ${cIdx + 1}/${clipsToProcess.length} tahlil qilinmoqda (${(c.duration || 0).toFixed(1)}s)...`;
+                        } else {
+                            const durMsg = c.duration ? ` (Qirqilgan qismi: ${c.duration.toFixed(1)}s)` : "";
+                            progressStatus.textContent = `Qirqilgan audio AI modelga yuborilmoqda${durMsg}...`;
+                        }
+                    }
+
+                    const syncOffsetMsVal = parseFloat(document.getElementById("inputSyncOffsetMs")?.value) || 0.0;
+                    let seqFps = 25.0;
+                    try {
+                        const sInfo = await window.HostBridge.getSequenceInfo();
+                        if (sInfo && sInfo.fps) seqFps = parseFloat(sInfo.fps);
+                    } catch (eFps) {}
+
+                    const options = {
+                        filePath: c.filePath || null,
+                        file: c.file || null,
+                        inPoint: c.inPoint !== undefined ? c.inPoint : null,
+                        outPoint: c.outPoint !== undefined ? c.outPoint : null,
+                        duration: c.duration !== undefined ? c.duration : null,
+                        provider: provider,
+                        script: script,
+                        convertNumbers: convertNumbers,
+                        fps: seqFps,
+                        syncOffsetMs: syncOffsetMsVal
+                    };
+
+                    const result = await window.SubtitleAPI.transcribe(options);
+                    if (result.status === "success" && result.segments) {
+                        const clipTimelineStart = (typeof c.start === "number") ? c.start : 0.0;
+                        for (const seg of result.segments) {
+                            const sStart = Number((seg.start + clipTimelineStart).toFixed(3));
+                            const sEnd = Number((seg.end + clipTimelineStart).toFixed(3));
+                            const shiftedWords = (seg.words || []).map(w => ({
+                                word: w.word,
+                                start: Number((w.start + clipTimelineStart).toFixed(3)),
+                                end: Number((w.end + clipTimelineStart).toFixed(3)),
+                                score: w.score || 1.0
+                            }));
+
+                            allSegments.push({
+                                id: globalSegId++,
+                                start: sStart,
+                                end: sEnd,
+                                text: seg.text,
+                                words: shiftedWords
+                            });
+                        }
+                    } else {
+                        throw new Error(`Klip ${cIdx + 1} bo'yicha transkripsiya olinmadi`);
+                    }
+                }
+
+                if (allSegments.length > 0) {
+                    allSegments.sort((a, b) => a.start - b.start);
+                    allSegments.forEach((s, idx) => s.id = idx + 1);
+
+                    // Segmentlar allaqachon o'zining timeline kadriga ega, shuning uchun offset = 0.0
+                    const offsetEl = document.getElementById("timelineOffsetInput");
+                    if (offsetEl) offsetEl.value = 0.0;
+
+                    window.SubtitleEditor.setSegments(allSegments);
+                    if (progressStatus) progressStatus.textContent = "Tayyor! Tahrirlash oynasiga o'tilmoqda...";
+
+                    setTimeout(() => {
+                        if (progressContainer) progressContainer.style.display = "none";
+                        btnStartTranscribe.disabled = false;
+                        switchTab("tab-editor");
+                    }, 500);
+                } else {
+                    throw new Error("Transkripsiya natijasi bo'sh qaytdi");
+                }
+            } catch (err) {
+                console.error("Transkripsiya xatosi:", err);
+                alert(`Xatolik: ${err.message || "Audioni taniy olmadi"}`);
+                if (progressContainer) progressContainer.style.display = "none";
+                btnStartTranscribe.disabled = false;
+            }
+        });
+    }
+}
+
+// ==================== TAHRIRLASH BO'LIMI ====================
+
+function initEditorSection() {
+    window.SubtitleEditor.loadCachedSegments();
+
+    const btnAddSegment = document.getElementById("btnAddSegment");
+    const btnSearchReplace = document.getElementById("btnSearchReplace");
+    const searchInput = document.getElementById("searchInput");
+    const replaceInput = document.getElementById("replaceInput");
+    const checkSaveDict = document.getElementById("checkSaveToDict");
+    const btnExportSRT = document.getElementById("btnExportSRT");
+    const btnExportVTT = document.getElementById("btnExportVTT");
+    const btnExportJSON = document.getElementById("btnExportJSON");
+    const importFileInput = document.getElementById("importFileInput");
+    const btnInsertTimeline = document.getElementById("btnInsertTimeline");
+
+    if (btnAddSegment) {
+        btnAddSegment.addEventListener("click", () => {
+            window.SubtitleEditor.addEmptySegment();
+        });
+    }
+
+    if (btnSearchReplace) {
+        btnSearchReplace.addEventListener("click", () => {
+            const s = searchInput.value.trim();
+            const r = replaceInput.value.trim();
+            if (!s) {
+                alert("Qidirilayotgan so'zni kiriting!");
+                return;
+            }
+            const count = window.SubtitleEditor.searchAndReplace(s, r, checkSaveDict.checked);
+            alert(`${count} ta o'rinda almashtirildi${checkSaveDict.checked ? " va lug'atga saqlandi" : ""}!`);
+        });
+    }
+
+    // Eksport SRT
+    if (btnExportSRT) {
+        btnExportSRT.addEventListener("click", async () => {
+            const isWordByWord = document.getElementById("checkWordByWord")?.checked || false;
+            const wordMode = document.getElementById("selectWordMode")?.value || "accumulate";
+            const wordHighlight = document.getElementById("inputWordHighlightColor")?.value || "#ffe600";
+            const res = await window.SubtitleAPI.exportSRT(
+                window.SubtitleEditor.segments,
+                null,
+                isWordByWord ? wordMode : null,
+                wordHighlight
+            );
+            const savedPath = window.UzbekUtils.downloadFile("subtitrlar.srt", res.content);
+            if (savedPath) {
+                alert(`✅ SRT fayli saqlandi:\n${savedPath}\n\nFaylni to'g'ridan-to'g'ri Premiere Pro Timeline'iga tortib (drag & drop) qo'yishingiz mumkin!`);
+            } else {
+                alert("✅ SRT fayli yuklab olindi! Uni Premiere Pro Timeline'iga tortib qo'yishingiz mumkin.");
+            }
+        });
+    }
+
+    // Eksport VTT
+    if (btnExportVTT) {
+        btnExportVTT.addEventListener("click", async () => {
+            const res = await window.SubtitleAPI.exportVTT(window.SubtitleEditor.segments);
+            window.UzbekUtils.downloadFile("subtitrlar.vtt", res.content);
+        });
+    }
+
+    // Eksport JSON
+    if (btnExportJSON) {
+        btnExportJSON.addEventListener("click", () => {
+            const jsonStr = JSON.stringify(window.SubtitleEditor.segments, null, 2);
+            window.UzbekUtils.downloadFile("subtitrlar_sozlar_bilan.json", jsonStr, "application/json");
+        });
+    }
+
+    // Import SRT / JSON
+    if (importFileInput) {
+        importFileInput.addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const content = event.target.result;
+                if (file.name.endsWith(".json")) {
+                    try {
+                        const parsed = JSON.parse(content);
+                        window.SubtitleEditor.setSegments(parsed);
+                        alert("JSON subtitr muvaffaqiyatli import qilindi!");
+                    } catch (err) {
+                        alert("Noto'g'ri JSON fayl formati!");
+                    }
+                } else {
+                    const parsed = window.SubtitleEditor.parseSRT(content);
+                    window.SubtitleEditor.setSegments(parsed);
+                    alert(`${parsed.length} ta SRT jumlasi import qilindi!`);
+                }
+            };
+            reader.readAsText(file);
+        });
+    }
+
+    // Vaqtni nozik siljitish (Nudge funksiyasi)
+    window.nudgeOffset = function(val) {
+        const el = document.getElementById("timelineOffsetInput");
+        if (!el) return;
+        if (val === 0) {
+            el.value = "0.0";
+        } else {
+            const cur = parseFloat(el.value) || 0.0;
+            el.value = (cur + val).toFixed(2);
+        }
+    };
+
+    const btnAutoSyncTime = document.getElementById("btnAutoSyncTime");
+    const timelineOffsetInput = document.getElementById("timelineOffsetInput");
+    if (btnAutoSyncTime) {
+        btnAutoSyncTime.addEventListener("click", async () => {
+            const res = await window.HostBridge.getSelectedMediaSource();
+            if (res.success) {
+                const off = (typeof res.offset === "number") ? res.offset : (res.start || res.startTime || 0);
+                const firstSegStart = (window.SubtitleEditor && window.SubtitleEditor.segments && window.SubtitleEditor.segments[0]) ? window.SubtitleEditor.segments[0].start : 0;
+                
+                // Agar transkripsiyada allaqachon klip boshlanish vaqti qo'shilgan bo'lsa
+                if (firstSegStart >= off - 0.5 && off > 0.5) {
+                    if (timelineOffsetInput) timelineOffsetInput.value = 0.0;
+                    alert(`🎯 Klip timeline'da ${off.toFixed(2)}s dan boshlanadi.\nSubtitrlaringiz allaqachon shu vaqtga moslangan! Ikki marta siljish bo'lmasligi uchun vaqt siljishi 0.0s qilib belgilandi.`);
+                } else {
+                    if (timelineOffsetInput) timelineOffsetInput.value = Number(off.toFixed(2));
+                    alert(`🎯 Klipning timeline vaqti aniqlandi: ${off.toFixed(2)} soniya!\nEndi subtitrlar klip boshlangan joydan to'g'ri qo'yiladi.`);
+                }
+            } else {
+                alert(res.message || "Timeline'da klip topilmadi!");
+            }
+        });
+    }
+
+    // Subtitrni Timeline'ga joylash (ASOSIY AMAL - Video ustidagi V2 trekka)
+    if (btnInsertTimeline) {
+        btnInsertTimeline.addEventListener("click", async () => {
+            if (window.SubtitleEditor.segments.length === 0) {
+                alert("Joylashtirish uchun avval subtitrlarni yarating yoki yuklang!");
+                return;
+            }
+
+            const offsetEl = document.getElementById("timelineOffsetInput");
+            const timelineOffset = offsetEl ? (parseFloat(offsetEl.value) || 0.0) : 0.0;
+
+            const leadInEl = document.getElementById("animationLeadInInput");
+            const leadIn = leadInEl ? (parseFloat(leadInEl.value) || 0.0) : 0.0;
+
+            btnInsertTimeline.disabled = true;
+            btnInsertTimeline.textContent = "Timeline'ga joylanmoqda...";
+
+            try {
+                const wordByWordEl = document.getElementById("checkWordByWord");
+                const isWordByWord = wordByWordEl ? wordByWordEl.checked : false;
+                const wordMode = document.getElementById("selectWordMode") ? document.getElementById("selectWordMode").value : "accumulate";
+                const maxWords = parseInt(document.getElementById("inputMaxWordsPerLine")?.value, 10) || 4;
+                const wordAnim = document.getElementById("selectWordAnimation")?.value || "pop";
+                const wordHighlight = document.getElementById("inputWordHighlightColor")?.value || "#ffe600";
+                const syncOffsetMs = parseFloat(document.getElementById("inputSyncOffsetMs")?.value) || 0.0;
+
+                const activePreset = { 
+                    ...window.PresetManager.getActivePreset(), 
+                    leadIn: leadIn,
+                    wordByWord: isWordByWord,
+                    wordMode: isWordByWord ? wordMode : "off",
+                    maxWordsPerLine: maxWords,
+                    wordAnimation: wordAnim,
+                    highlightColor: wordHighlight,
+                    syncOffsetMs: syncOffsetMs
+                };
+                const res = await window.HostBridge.insertSubtitles(window.SubtitleEditor.segments, activePreset, timelineOffset);
+
+                if (res.success) {
+                    if (res.placed) {
+                        alert(res.message || "✅ Subtitrlar videoning tepasidagi trekka muvaffaqiyatli joylandi!");
+                    } else {
+                        alert(`${res.message || "✅ Subtitrlar loyihangizga import qilindi!"}\n\n💡 Uni Project panelidan Timeline'ga (video ustidagi trekka) tortib qo'ying.`);
+                    }
+                } else {
+                    alert(`Xatolik: ${res.message || res.error || "Noma'lum xatolik"}`);
+                }
+            } catch (err) {
+                console.error("Timeline'ga joylashda xatolik:", err);
+                alert(`Xatolik yuz berdi: ${err.message}`);
+            } finally {
+                btnInsertTimeline.disabled = false;
+                btnInsertTimeline.textContent = "🎬 Video Ustidagi Trekka Joylash (V2 / AE)";
+            }
+        });
+    }
+}
+
+// ==================== STILLAR VA ANIMATSIYA BO'LIMI ====================
+
+function initPresetsSection() {
+    renderPresetCards();
+
+    const searchInput = document.getElementById("presetSearchInput");
+    if (searchInput) {
+        searchInput.addEventListener("input", (e) => {
+            window.PresetManager.searchQuery = e.target.value;
+            renderPresetCards();
+        });
+    }
+
+    const catTabs = document.getElementById("presetCategoryTabs");
+    if (catTabs) {
+        catTabs.addEventListener("click", (e) => {
+            const btn = e.target.closest("button");
+            if (btn && btn.dataset.category) {
+                window.PresetManager.activeCategory = btn.dataset.category;
+                catTabs.querySelectorAll("button").forEach(b => {
+                    b.classList.remove("active-preset-cat");
+                    b.style.fontWeight = "normal";
+                    b.style.color = "var(--text-color)";
+                });
+                btn.classList.add("active-preset-cat");
+                btn.style.fontWeight = "bold";
+                btn.style.color = "#60a5fa";
+                renderPresetCards();
+            }
+        });
+    }
+
+    const btnCancelTargetSegment = document.getElementById("btnCancelTargetSegment");
+    if (btnCancelTargetSegment) {
+        btnCancelTargetSegment.addEventListener("click", () => {
+            if (window.SubtitleEditor && typeof window.SubtitleEditor.cancelPickStyle === "function") {
+                window.SubtitleEditor.cancelPickStyle();
+            }
+        });
+    }
+
+    const btnApplyActiveToAll = document.getElementById("btnApplyActiveToAll");
+    if (btnApplyActiveToAll) {
+        btnApplyActiveToAll.addEventListener("click", () => {
+            const activeP = window.PresetManager.getActivePreset();
+            if (window.SubtitleEditor && window.SubtitleEditor.segments.length > 0) {
+                window.SubtitleEditor.segments.forEach(seg => {
+                    seg.mogrtPath = activeP.mogrtPath || "";
+                    seg.ffxPresetPath = activeP.ffxPresetPath || "";
+                    seg.styleName = activeP.name;
+                });
+                window.SubtitleEditor.render();
+                alert(`Barcha ${window.SubtitleEditor.segments.length} ta jumlaga "${activeP.name}" uslubi biriktirildi!\nEndi "Video Ustidagi Trekka Joylash" tugmasini bosib timeline'ga chiqaring.`);
+            } else {
+                alert(`Aktiv shablon tanlandi: "${activeP.name}"`);
+            }
+        });
+    }
+
+    // AEJuice uslubidagi Playhead (kursor) turgan joyga MOGRT qo'yish
+    const btnApplyToPlayhead = document.getElementById("btnApplyToPlayhead");
+    if (btnApplyToPlayhead) {
+        btnApplyToPlayhead.addEventListener("click", async () => {
+            const activeP = window.PresetManager.getActivePreset();
+            if (!activeP || !activeP.mogrtPath) {
+                alert("Iltimos, avval ro'yxatdan birorta MOGRT animatsiyani tanlang.");
+                return;
+            }
+            btnApplyToPlayhead.disabled = true;
+            try {
+                const res = await window.HostBridge.insertSingleMogrtAtPlayhead(activeP.mogrtPath, activeP.name);
+                if (res && res.success) {
+                    alert("✨ " + (res.message || `${activeP.name} playhead turgan joyga muvaffaqiyatli qo'yildi!`));
+                } else {
+                    alert("⚠️ " + (res.message || res.error || "MOGRT timeline'ga import qilib bo'lmadi"));
+                }
+            } catch (err) {
+                alert("Xatolik: " + err.message);
+            } finally {
+                btnApplyToPlayhead.disabled = false;
+            }
+        });
+    }
+
+    // Stil va Shrift sozlamalari (Quick Customizer)
+    const customFontSize = document.getElementById("customFontSize");
+    const fontSizeVal = document.getElementById("fontSizeVal");
+    if (customFontSize) {
+        customFontSize.addEventListener("input", (e) => {
+            if (fontSizeVal) fontSizeVal.textContent = e.target.value + "px";
+            const p = window.PresetManager.getActivePreset();
+            if (p) p.fontSize = parseInt(e.target.value);
+        });
+    }
+
+    const customPosY = document.getElementById("customPosY");
+    const posYVal = document.getElementById("posYVal");
+    if (customPosY) {
+        customPosY.addEventListener("input", (e) => {
+            if (posYVal) posYVal.textContent = e.target.value + "%";
+            const p = window.PresetManager.getActivePreset();
+            if (p) p.positionYPercent = parseInt(e.target.value);
+        });
+    }
+
+    const customTextColor = document.getElementById("customTextColor");
+    if (customTextColor) {
+        customTextColor.addEventListener("input", (e) => {
+            const p = window.PresetManager.getActivePreset();
+            if (p) {
+                const hex = e.target.value;
+                const r = parseInt(hex.slice(1, 3), 16) / 255;
+                const g = parseInt(hex.slice(3, 5), 16) / 255;
+                const b = parseInt(hex.slice(5, 7), 16) / 255;
+                p.fillColor = [r, g, b];
+            }
+        });
+    }
+
+    const customKaraokeColor = document.getElementById("customKaraokeColor");
+    if (customKaraokeColor) {
+        customKaraokeColor.addEventListener("input", (e) => {
+            const p = window.PresetManager.getActivePreset();
+            if (p) {
+                const hex = e.target.value;
+                const r = parseInt(hex.slice(1, 3), 16) / 255;
+                const g = parseInt(hex.slice(3, 5), 16) / 255;
+                const b = parseInt(hex.slice(5, 7), 16) / 255;
+                p.highlightColor = [r, g, b];
+            }
+        });
+    }
+
+    const customAllCaps = document.getElementById("customAllCaps");
+    if (customAllCaps) {
+        customAllCaps.addEventListener("change", (e) => {
+            if (window.SubtitleEditor && window.SubtitleEditor.segments.length > 0) {
+                window.SubtitleEditor.segments.forEach(seg => {
+                    seg.text = e.target.checked ? seg.text.toUpperCase() : seg.text;
+                    if (seg.words) {
+                        seg.words.forEach(w => w.word = e.target.checked ? w.word.toUpperCase() : w.word);
+                    }
+                });
+                window.SubtitleEditor.render();
+            }
+        });
+    }
+
+    // SO'ZMA-SO'Z REJIMI (WORD-BY-WORD CONTROLS)
+    const checkWordByWord = document.getElementById("checkWordByWord");
+    const wordByWordSettingsBox = document.getElementById("wordByWordSettingsBox");
+    const wordModeStatusBadge = document.getElementById("wordModeStatusBadge");
+    const rangeSyncOffsetMs = document.getElementById("rangeSyncOffsetMs");
+    const inputSyncOffsetMs = document.getElementById("inputSyncOffsetMs");
+    const syncOffsetMsLabel = document.getElementById("syncOffsetMsLabel");
+
+    function updateSyncOffsetUI(val) {
+        const num = parseFloat(val) || 0;
+        if (rangeSyncOffsetMs) rangeSyncOffsetMs.value = num;
+        if (inputSyncOffsetMs) inputSyncOffsetMs.value = num;
+        if (syncOffsetMsLabel) {
+            syncOffsetMsLabel.textContent = (num > 0 ? `+${num}` : `${num}`) + " ms";
+            syncOffsetMsLabel.style.color = (num === 0) ? "#4ade80" : (num > 0 ? "#60a5fa" : "#f59e0b");
+        }
+    }
+
+    window.setWordSyncOffset = function(ms) {
+        updateSyncOffsetUI(ms);
+    };
+
+    if (rangeSyncOffsetMs) {
+        rangeSyncOffsetMs.addEventListener("input", (e) => {
+            updateSyncOffsetUI(e.target.value);
+        });
+    }
+    if (inputSyncOffsetMs) {
+        inputSyncOffsetMs.addEventListener("input", (e) => {
+            updateSyncOffsetUI(e.target.value);
+        });
+    }
+
+    if (checkWordByWord) {
+        checkWordByWord.addEventListener("change", (e) => {
+            const isChecked = e.target.checked;
+            if (wordByWordSettingsBox) {
+                wordByWordSettingsBox.style.display = isChecked ? "flex" : "none";
+            }
+            if (wordModeStatusBadge) {
+                wordModeStatusBadge.textContent = isChecked ? "Faol (Yoqilgan)" : "O‘chirilgan";
+                wordModeStatusBadge.style.color = isChecked ? "#4ade80" : "var(--text-muted)";
+                wordModeStatusBadge.style.background = isChecked ? "rgba(34, 197, 94, 0.15)" : "rgba(255,255,255,0.06)";
+            }
+        });
+    }
+
+    const btnSaveFromLayer = document.getElementById("btnSaveFromLayer");
+    const ffxFileInput = document.getElementById("ffxFileInput");
+    const mogrtFileInput = document.getElementById("mogrtFileInput");
+    const btnExportPack = document.getElementById("btnExportPack");
+    const packFileInput = document.getElementById("packFileInput");
+
+    // Qatlamdan stilni o'qib saqlash
+    if (btnSaveFromLayer) {
+        btnSaveFromLayer.addEventListener("click", async () => {
+            const name = prompt("Yangi stil uchun nom kiriting:", "Mening Shaxsiy Stilim");
+            if (!name) return;
+
+            try {
+                const newPreset = await window.PresetManager.saveStyleFromSelectedLayer(name);
+                renderPresetCards();
+                alert(`"${newPreset.name}" muvaffaqiyatli saqlandi va faollashtirildi!`);
+            } catch (err) {
+                alert(`Xatolik: ${err.message}`);
+            }
+        });
+    }
+
+    // .ffx preset import
+    if (ffxFileInput) {
+        ffxFileInput.addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const fullPath = file.path || file.name;
+                const p = window.PresetManager.importFFXPreset(fullPath);
+                renderPresetCards();
+                alert(`"${p.name}" kutubxonaga qo'shildi!`);
+            }
+        });
+    }
+
+    // .mogrt shablon import
+    if (mogrtFileInput) {
+        mogrtFileInput.addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const fullPath = file.path || file.name;
+                const p = window.PresetManager.importMogrtPreset(fullPath);
+                renderPresetCards();
+                alert(`"${p.name}" kutubxonaga qo'shildi!`);
+            }
+        });
+    }
+
+    // Paketni eksport qilish
+    if (btnExportPack) {
+        btnExportPack.addEventListener("click", () => {
+            window.PresetManager.exportPresetsPack();
+        });
+    }
+
+    // Paketni import qilish
+    if (packFileInput) {
+        packFileInput.addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const cnt = window.PresetManager.importPresetsPack(ev.target.result);
+                        renderPresetCards();
+                        alert(`${cnt} ta stil to'plami muvaffaqiyatli import qilindi!`);
+                    } catch (err) {
+                        alert(err.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+        });
+    }
+}
+
+function handlePresetCardHover(cardEl, isHover) {
+    if (!cardEl) return;
+    const video = cardEl.querySelector("video.preset-hover-video");
+    if (video) {
+        if (isHover) {
+            if (!video.src && video.dataset.src) {
+                video.src = video.dataset.src;
+            }
+            video.play().catch(() => {});
+        } else {
+            video.pause();
+            try { video.currentTime = 0; } catch (e) {}
+        }
+    }
+}
+
+function renderPresetCards() {
+    const grid = document.getElementById("presetGrid");
+    if (!grid) return;
+
+    const presets = window.PresetManager.getFilteredPresets ? window.PresetManager.getFilteredPresets() : window.PresetManager.presets;
+    const activeId = window.PresetManager.activePresetId;
+
+    const activeTitleEl = document.getElementById("activePresetTitle");
+    const activePreset = window.PresetManager.getActivePreset();
+    if (activeTitleEl && activePreset) {
+        const typeBadge = activePreset.templateType ? ` [${activePreset.templateType}]` : '';
+        activeTitleEl.textContent = `${activePreset.name}${typeBadge}`;
+    }
+
+    if (!presets || presets.length === 0) {
+        grid.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-muted); font-size: 11px;">
+                🔍 Mos keluvchi shablon topilmadi. Qidiruv so'zini o'zgartiring yoki boshqa kategoriyani tanlang.
+            </div>
+        `;
+        return;
+    }
+
+    let html = "";
+    for (const p of presets) {
+        const isActive = p.id === activeId;
+        const colorHex = p.fillColor ? rgbToHex(p.fillColor[0], p.fillColor[1], p.fillColor[2]) : "#FFFFFF";
+        const strokeHex = p.strokeColor ? rgbToHex(p.strokeColor[0], p.strokeColor[1], p.strokeColor[2]) : "#000000";
+
+        let typeBadgeHtml = "";
+        if (p.templateType) {
+            const bColor = p.templateType === "MOGRT" ? "#a855f7" : (p.templateType === "FFX" ? "#06b6d4" : "#3b82f6");
+            typeBadgeHtml = `<span style="font-size: 9px; font-weight: bold; background: ${bColor}; color: white; padding: 1px 4px; border-radius: 3px; margin-right: 4px;">${p.templateType}</span>`;
+        }
+
+        const targetPath = p.mogrtPath || p.ffxPresetPath || "";
+        const encodedPath = encodeURIComponent(targetPath);
+        const anim = p.animType || (p.isKaraoke ? "hormozi" : "pop");
+
+        let previewInnerHtml = "";
+        if (p.hasVideo && targetPath) {
+            const videoUrl = `http://127.0.0.1:8765/presets/preview?path=${encodedPath}&media_type=video`;
+            const posterUrl = p.hasThumb ? `http://127.0.0.1:8765/presets/preview?path=${encodedPath}&media_type=image` : "";
+            previewInnerHtml = `
+                <div class="preset-media-wrapper">
+                    <video class="preset-hover-video" muted loop playsinline preload="metadata" data-src="${videoUrl}" ${posterUrl ? `poster="${posterUrl}"` : ''}></video>
+                    <div class="hover-play-badge">▶ Video Preview</div>
+                </div>
+            `;
+        } else if (p.hasThumb && targetPath) {
+            const thumbUrl = `http://127.0.0.1:8765/presets/preview?path=${encodedPath}&media_type=image`;
+            previewInnerHtml = `
+                <div class="preset-media-wrapper">
+                    <img class="preset-hover-thumb" src="${thumbUrl}" alt="Preview" loading="lazy">
+                    <div class="hover-play-badge" style="color: #60a5fa; border-color: rgba(96,165,250,0.3);">✨ ${anim.toUpperCase()}</div>
+                </div>
+            `;
+        } else {
+            previewInnerHtml = `
+                <div class="anim-sample anim-${anim}" style="color: ${colorHex}; -webkit-text-stroke: ${p.strokeWidth || 1}px ${strokeHex};">
+                    <span class="w1">O‘zbekcha</span> <span class="w2">AI</span> <span class="w3">Subtitr</span>
+                </div>
+            `;
+        }
+
+        html += `
+            <div class="preset-card ${isActive ? 'active' : ''}" 
+                 onclick="selectPreset('${p.id}')" 
+                 onmouseenter="handlePresetCardHover(this, true)" 
+                 onmouseleave="handlePresetCardHover(this, false)">
+                <div class="preset-preview">
+                    ${previewInnerHtml}
+                </div>
+                <div class="preset-info">
+                    <div class="preset-title">${typeBadgeHtml}${window.UzbekUtils.escapeHtml(p.name)}</div>
+                    <div class="preset-meta">${window.UzbekUtils.escapeHtml(p.category || 'Standart')}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    grid.innerHTML = html;
+}
+window.renderPresetCards = renderPresetCards;
+
+function updateSegmentTargetBanner(index, text) {
+    const banner = document.getElementById("segmentTargetBanner");
+    const targetTextEl = document.getElementById("segmentTargetText") || document.getElementById("targetSegmentText");
+    if (!banner) return;
+
+    if (index !== null && index !== undefined) {
+        banner.style.display = "flex";
+        if (targetTextEl) {
+            targetTextEl.textContent = text ? text : `#${index + 1}`;
+        }
+    } else {
+        banner.style.display = "none";
+    }
+}
+window.updateSegmentTargetBanner = updateSegmentTargetBanner;
+
+function selectPreset(id) {
+    window.PresetManager.activePresetId = id;
+    renderPresetCards();
+
+    // 1. Agar foydalanuvchi alohida bitta so'z uchun animatsiya tanlayotgan bo'lsa:
+    if (window.SubtitleEditor && window.SubtitleEditor.targetWordInfo) {
+        const tw = window.SubtitleEditor.targetWordInfo;
+        const p = (window.PresetManager.presets || []).find(item => item.id === id);
+        if (p) {
+            window.SubtitleEditor.applyStyleToWord(tw.segIndex, tw.wordIndex, p);
+        }
+        window.SubtitleEditor.targetWordInfo = null;
+        window.SubtitleEditor.targetSegmentIndex = null;
+        updateSegmentTargetBanner(null);
+
+        if (typeof window.switchTab === "function") {
+            window.switchTab("tab-editor");
+        }
+        return;
+    }
+
+    // 2. Agar foydalanuvchi biron bir jumla/qator uchun "Stil" bosib kelgan bo'lsa:
+    if (window.SubtitleEditor && window.SubtitleEditor.targetSegmentIndex !== null && window.SubtitleEditor.targetSegmentIndex !== undefined) {
+        const segIdx = window.SubtitleEditor.targetSegmentIndex;
+        const seg = window.SubtitleEditor.segments[segIdx];
+        const p = (window.PresetManager.presets || []).find(item => item.id === id);
+        if (seg && p) {
+            seg.mogrtPath = p.mogrtPath || "";
+            seg.ffxPresetPath = p.ffxPresetPath || "";
+            seg.animType = p.animType || "";
+            seg.styleName = p.name;
+            seg.templateType = p.templateType || "";
+
+            window.SubtitleEditor.targetSegmentIndex = null;
+            updateSegmentTargetBanner(null);
+            window.SubtitleEditor.render();
+
+            // Tahrirlash oynasiga avtomatik qaytish
+            if (typeof window.switchTab === "function") {
+                window.switchTab("tab-editor");
+            }
+
+            // O'sha qatorga silliq o'tib, ko'k rangda porlash (glow effekti)
+            setTimeout(() => {
+                const card = document.getElementById(`seg_card_${segIdx}`);
+                if (card) {
+                    card.scrollIntoView({ behavior: "smooth", block: "center" });
+                    card.style.transition = "box-shadow 0.4s ease, border-color 0.4s ease";
+                    card.style.boxShadow = "0 0 18px rgba(96, 165, 250, 0.9)";
+                    card.style.borderColor = "#60a5fa";
+                    setTimeout(() => {
+                        card.style.boxShadow = "";
+                        card.style.borderColor = "";
+                    }, 1800);
+                }
+            }, 150);
+        }
+    }
+}
+window.selectPreset = selectPreset;
+window.handlePresetCardHover = handlePresetCardHover;
+
+function rgbToHex(r, g, b) {
+    const toHex = (n) => {
+        const h = Math.round(n * 255).toString(16);
+        return h.length === 1 ? '0' + h : h;
+    };
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+// ==================== SOZLAMALAR BO'LIMI ====================
+
+async function initSettingsSection() {
+    const cfg = await window.SubtitleAPI.getConfig();
+    if (cfg) {
+        populateConfigUI(cfg);
+    }
+
+    // Lug'atni yuklash
+    loadDictionaryUI();
+
+    const btnSaveConfig = document.getElementById("btnSaveConfig");
+    if (btnSaveConfig) {
+        btnSaveConfig.addEventListener("click", async () => {
+            const updated = collectConfigUI();
+            try {
+                await window.SubtitleAPI.saveConfig(updated);
+                alert("Sozlamalar muvaffaqiyatli saqlandi!");
+                checkBackendStatus();
+            } catch (err) {
+                alert(`Sozlamalarni saqlashda xatolik: ${err.message}`);
+            }
+        });
+    }
+
+    const btnAddDictWord = document.getElementById("btnAddDictWord");
+    if (btnAddDictWord) {
+        btnAddDictWord.addEventListener("click", async () => {
+            const wrong = document.getElementById("dictWrongInput").value.trim();
+            const right = document.getElementById("dictRightInput").value.trim();
+            if (!wrong || !right) {
+                alert("Iltimos, har ikki maydonni ham to'ldiring!");
+                return;
+            }
+
+            const dict = await window.SubtitleAPI.getDictionary();
+            dict[wrong.toLowerCase()] = right;
+            await window.SubtitleAPI.saveDictionary(dict);
+
+            document.getElementById("dictWrongInput").value = "";
+            document.getElementById("dictRightInput").value = "";
+            loadDictionaryUI();
+        });
+    }
+
+    // Diagnostika funksiyasini ishga tushirish
+    initDiagnosticsUI();
+}
+
+let lastDiagReportText = "";
+
+function initDiagnosticsUI() {
+    const btnRunDiagnostics = document.getElementById("btnRunDiagnostics");
+    const diagResultsContainer = document.getElementById("diagResultsContainer");
+    const diagList = document.getElementById("diagList");
+    const btnCopyDiagLog = document.getElementById("btnCopyDiagLog");
+
+    if (btnRunDiagnostics) {
+        btnRunDiagnostics.addEventListener("click", async () => {
+            btnRunDiagnostics.disabled = true;
+            btnRunDiagnostics.textContent = "Tekshirilmoqda...";
+            if (diagResultsContainer) diagResultsContainer.style.display = "block";
+            if (diagList) diagList.innerHTML = "<div>⏳ Diagnostika ma'lumotlari yig'ilmoqda...</div>";
+
+            try {
+                const report = await window.HostBridge.runDiagnostics();
+                renderDiagnosticsReport(report);
+            } catch (err) {
+                if (diagList) {
+                    diagList.innerHTML = `<div style="color: #f87171;">❌ Diagnostikada xatolik: ${err.message}</div>`;
+                }
+            } finally {
+                btnRunDiagnostics.disabled = false;
+                btnRunDiagnostics.textContent = "🔍 Tekshirish";
+            }
+        });
+    }
+
+    if (btnCopyDiagLog) {
+        btnCopyDiagLog.addEventListener("click", () => {
+            if (!lastDiagReportText) {
+                alert("Avval 'Tekshirish' tugmasini bosing!");
+                return;
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(lastDiagReportText).then(() => {
+                    alert("✅ Diagnostika logi buferga (clipboard) nusxalandi!");
+                }).catch(() => {
+                    prompt("Logni qo'lda nusxalang (Ctrl+C):", lastDiagReportText);
+                });
+            } else {
+                prompt("Logni nusxalang (Ctrl+C):", lastDiagReportText);
+            }
+        });
+    }
+}
+
+function renderDiagnosticsReport(report) {
+    const diagList = document.getElementById("diagList");
+    if (!diagList) return;
+
+    const ext = report.extendScript || {};
+    const backend = report.backend || {};
+    const host = report.hostApp || "UNKNOWN";
+
+    const isExtOk = ext.ok && ext.extendScriptConnected;
+    const hasTimeline = ext.timeline && ext.timeline.exists;
+    const isBackendOk = backend.online;
+    const canWrite = ext.fileWritePermission !== false;
+
+    let logText = `=== O'ZBEKCHA AI SUBTITR DIAGNOSTIKA HISOBOTI ===\n`;
+    logText += `Vaqt: ${report.timestamp}\n`;
+    logText += `Host Dastur: ${ext.appName || host} (Versiya: ${ext.appVersion || "Noma'lum"})\n`;
+    logText += `ExtendScript Ulanishi: ${isExtOk ? "FAOL (OK)" : "XATO: " + (ext.error || "Ulanmadi")}\n`;
+    logText += `Faol Timeline: ${hasTimeline ? (ext.timeline.name + " (" + (ext.timeline.fps ? ext.timeline.fps.toFixed(2) : 25) + " fps)") : "Yo'q"}\n`;
+    logText += `Tanlangan elementlar: ${ext.selection ? ext.selection.count + " ta (" + (ext.selection.items ? ext.selection.items.join(", ") : "") + ")" : "0 ta"}\n`;
+    logText += `Fayl yozish huquqi: ${canWrite ? "Ruxsat berilgan (OK)" : "CHEKLANGAN (Scripting File Access o'chiq)"}\n`;
+    logText += `Backend STT (AI): ${isBackendOk ? "FAOL (" + (backend.device_name || "CPU") + ", Model: " + (backend.model_size || "Noma'lum") + ", Provayder: " + (backend.active_provider || "Noma'lum") + ")" : "O'CHIQ (" + (backend.error || "127.0.0.1:8765 ga ulanib bo'lmadi") + ")"}\n`;
+    if (ext.details && ext.details.length > 0) {
+        logText += `Qo'shimcha tafsilotlar: ${ext.details.join("; ")}\n`;
+    }
+    logText += `===============================================\n`;
+
+    lastDiagReportText = logText;
+
+    let html = "";
+    html += `<div>${isExtOk ? "✅" : "❌"} <strong>Host:</strong> ${ext.appName || host} ${ext.appVersion ? "v" + ext.appVersion : ""}</div>`;
+    html += `<div>${isExtOk ? "✅" : "❌"} <strong>ExtendScript:</strong> ${isExtOk ? "Ulandi" : "Xatolik (" + (ext.error || "Aloqa yo'q") + ")"}</div>`;
+    html += `<div>${hasTimeline ? "✅" : "⚠️"} <strong>Faol ${ext.timeline ? ext.timeline.type : "Timeline"}:</strong> ${hasTimeline ? ext.timeline.name : "Ochilmagan"}</div>`;
+    html += `<div>${ext.selection && ext.selection.count > 0 ? "🎯" : "ℹ️"} <strong>Tanlov:</strong> ${ext.selection ? ext.selection.count + " ta klip/qatlam" : "Klip tanlanmagan"}</div>`;
+    html += `<div>${canWrite ? "✅" : "⚠️"} <strong>Fayl ruxsati (AE):</strong> ${canWrite ? "Mavjud" : "Cheklangan (Preferences > Scripting da ruxsat bering)"}</div>`;
+    html += `<div>${isBackendOk ? "✅" : "❌"} <strong>AI Backend:</strong> ${isBackendOk ? "Faol (" + (backend.active_provider || "AI") + ")" : "Ulanmagan (start_backend.bat)"}</div>`;
+
+    diagList.innerHTML = html;
+}
+
+function populateConfigUI(cfg) {
+    const pSelect = document.getElementById("cfgProvider");
+    const mSelect = document.getElementById("cfgModelSize");
+    const sSelect = document.getElementById("cfgScript");
+    const lineLen = document.getElementById("cfgLineLen");
+    const numCheck = document.getElementById("cfgNumWords");
+
+    if (pSelect) pSelect.value = cfg.provider || "local_whisper";
+    if (mSelect) mSelect.value = cfg.model_size || "small";
+    if (sSelect) sSelect.value = cfg.script || "latin";
+    if (lineLen) lineLen.value = cfg.max_line_length || 35;
+    if (numCheck) numCheck.checked = !!cfg.convert_numbers;
+
+    const keys = cfg.api_keys || {};
+    const gemKey = document.getElementById("cfgGeminiKey");
+    const gKey = document.getElementById("cfgGoogleKey");
+    const aKey = document.getElementById("cfgAzureKey");
+    const cUrl = document.getElementById("cfgCustomUrl");
+
+    if (gemKey) gemKey.value = keys.gemini || "";
+    if (gKey) gKey.value = keys.google_cloud || "";
+    if (aKey) aKey.value = keys.azure_speech || "";
+    if (cUrl) cUrl.value = keys.custom_api_url || "";
+}
+
+function collectConfigUI() {
+    return {
+        provider: document.getElementById("cfgProvider").value,
+        model_size: document.getElementById("cfgModelSize").value,
+        script: document.getElementById("cfgScript").value,
+        max_line_length: parseInt(document.getElementById("cfgLineLen").value) || 35,
+        convert_numbers: document.getElementById("cfgNumWords").checked,
+        api_keys: {
+            gemini: document.getElementById("cfgGeminiKey") ? document.getElementById("cfgGeminiKey").value.trim() : "",
+            google_cloud: document.getElementById("cfgGoogleKey").value.trim(),
+            azure_speech: document.getElementById("cfgAzureKey").value.trim(),
+            custom_api_url: document.getElementById("cfgCustomUrl").value.trim()
+        }
+    };
+}
+
+async function loadDictionaryUI() {
+    const listContainer = document.getElementById("dictWordList");
+    if (!listContainer) return;
+
+    const dict = await window.SubtitleAPI.getDictionary();
+    const entries = Object.entries(dict);
+
+    if (entries.length === 0) {
+        listContainer.innerHTML = "<small style='color: #888;'>Lug'at hozircha bo'sh</small>";
+        return;
+    }
+
+    let html = "";
+    for (const [wrong, right] of entries) {
+        html += `
+            <div class="dict-row">
+                <span class="wrong">${window.UzbekUtils.escapeHtml(wrong)}</span>
+                <span class="arrow">➔</span>
+                <span class="right">${window.UzbekUtils.escapeHtml(right)}</span>
+                <button class="btn-del" onclick="deleteDictWord('${wrong}')">✕</button>
+            </div>
+        `;
+    }
+    listContainer.innerHTML = html;
+}
+
+async function deleteDictWord(wrong) {
+    const dict = await window.SubtitleAPI.getDictionary();
+    delete dict[wrong];
+    await window.SubtitleAPI.saveDictionary(dict);
+    loadDictionaryUI();
+}
+
+window.deleteDictWord = deleteDictWord;
+window.selectPreset = selectPreset;
