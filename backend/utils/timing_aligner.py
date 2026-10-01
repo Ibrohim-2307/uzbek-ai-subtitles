@@ -378,14 +378,28 @@ def align_words_to_timed_words(
                 result[i]["start"] = calc_s
                 result[i]["end"] = round(calc_s + orig_dur, 3)
 
-    # Qat'iy monotonlik va minimal davomiylikni tekshirish
+    # Qat'iy monotonlik va minimal davomiylikni tekshirish hamda kanonik metama'lumotlarni o'rnatish
     for i in range(N):
+        orig_s = float(p_items[i]["start"])
+        orig_e = float(p_items[i]["end"])
         if result[i]["end"] - result[i]["start"] < 0.08:
             result[i]["end"] = round(result[i]["start"] + 0.08, 3)
         if i > 0 and result[i]["start"] < result[i - 1]["start"]:
             result[i]["start"] = result[i - 1]["start"]
             if result[i]["end"] - result[i]["start"] < 0.08:
                 result[i]["end"] = round(result[i]["start"] + 0.08, 3)
+
+        result[i]["raw_start"] = orig_s
+        result[i]["raw_end"] = orig_e
+        result[i]["original_start"] = orig_s
+        result[i]["aligned_start"] = result[i]["start"]
+        result[i]["snap_shift_ms"] = round(abs(result[i]["start"] - orig_s) * 1000.0, 1)
+        if result[i].get("measured"):
+            result[i]["timing_source"] = "whisper_measured"
+            result[i]["timing_confidence"] = float(result[i].get("confidence", 0.9))
+        else:
+            result[i]["timing_source"] = "interpolated"
+            result[i]["timing_confidence"] = 0.5
 
     return result
 

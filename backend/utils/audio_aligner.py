@@ -450,13 +450,27 @@ def snap_word_timestamps_to_audio(
         shift_ms = abs(cur_start - initial_starts[idx]) * 1000.0
         shifts.append(shift_ms)
 
+        orig_w_raw_s = getattr(w, "raw_start", orig_start) if hasattr(w, "raw_start") else (w.get("raw_start", orig_start) if isinstance(w, dict) else orig_start)
+        orig_w_raw_e = getattr(w, "raw_end", orig_end) if hasattr(w, "raw_end") else (w.get("raw_end", orig_end) if isinstance(w, dict) else orig_end)
+        orig_src = getattr(w, "timing_source", None) if hasattr(w, "timing_source") else (w.get("timing_source") if isinstance(w, dict) else None)
+        if not orig_src:
+            orig_src = "whisper"
+        w_timing_src = f"{orig_src}+energy_snap" if shift_ms > 15.0 else orig_src
+
         refined_words.append({
             "word": w_word,
             "start": round(cur_start, 3),
             "end": round(cur_end, 3),
             "score": score,
             "confidence": score,
-            "pause_after_ms": 0.0
+            "pause_after_ms": 0.0,
+            "raw_start": orig_w_raw_s,
+            "raw_end": orig_w_raw_e,
+            "original_start": initial_starts[idx],
+            "aligned_start": round(cur_start, 3),
+            "timing_source": w_timing_src,
+            "timing_confidence": score,
+            "snap_shift_ms": round(shift_ms, 1)
         })
 
     # 5. Ketma-ketlik va to'qnashuvlarni to'g'rilash (Monotonicity Invariants)
@@ -466,6 +480,7 @@ def snap_word_timestamps_to_audio(
             prev_end = refined_words[i - 1]["end"]
             if refined_words[i]["start"] < prev_end:
                 refined_words[i]["start"] = prev_end
+                refined_words[i]["aligned_start"] = prev_end
             if refined_words[i]["end"] <= refined_words[i]["start"]:
                 refined_words[i]["end"] = round(refined_words[i]["start"] + min_dur_sec, 3)
 

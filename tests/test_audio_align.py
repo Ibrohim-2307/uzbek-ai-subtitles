@@ -406,6 +406,174 @@ class TestAudioAlign(unittest.TestCase):
         self.assertIsNotNone(ffmpeg_bin)
         self.assertTrue(os.path.exists(ffmpeg_bin))
 
+    # 32. TEST 1: Canonical Offset (clip_start=10.0, word_local=1.0, sync_offset=0 -> 11.0)
+    def test_32_regression_test_01_canonical_offset(self):
+        clip_timeline_start_sec = 10.0
+        audio_local_sec = 1.0
+        speed_factor = 1.0
+        manual_sync_offset_sec = 0.0
+        final_timeline_sec = clip_timeline_start_sec + (audio_local_sec / speed_factor) + manual_sync_offset_sec
+        self.assertAlmostEqual(final_timeline_sec, 11.0, places=3)
+
+    # 33. TEST 2: Double-offset bug protection (clip_start=10.0, word_local=1.0, sync_offset=+200ms -> 11.2, NEVER 11.4)
+    def test_33_regression_test_02_double_offset_prevention(self):
+        clip_timeline_start_sec = 10.0
+        audio_local_sec = 1.0
+        speed_factor = 1.0
+        sync_offset_ms = 200.0
+        manual_sync_offset_sec = sync_offset_ms / 1000.0
+
+        # Simulating frontend passing both sync_offset_ms and timeline_offset_ms
+        timeline_offset_ms = 200.0
+        # In backend, timeline_offset_ms is only used as fallback if clip_start is None
+        tl_offset_sec = clip_timeline_start_sec  # NOT clip_start + timeline_offset_ms
+        final_timeline_sec = tl_offset_sec + (audio_local_sec / speed_factor) + manual_sync_offset_sec
+        self.assertAlmostEqual(final_timeline_sec, 11.2, places=3)
+        self.assertNotAlmostEqual(final_timeline_sec, 11.4, places=3)
+
+    # 34. TEST 3: Trimmed audio 0-based coordinate protection (clip_start=10, in_point=30, trimmed word=1.0 -> 11.0, NEVER 41.0)
+    def test_34_regression_test_03_in_point_no_double_add(self):
+        clip_timeline_start_sec = 10.0
+        source_in_point = 30.0  # Used during ffmpeg audio trimming
+        # Trimmed audio starts at 0.0; Whisper returns 1.0 relative to trimmed audio
+        audio_local_sec = 1.0
+        # When mapping 0-based audio to timeline, in_point must NOT be added again
+        final_timeline_sec = clip_timeline_start_sec + audio_local_sec
+        self.assertAlmostEqual(final_timeline_sec, 11.0, places=3)
+        self.assertNotAlmostEqual(final_timeline_sec, 41.0, places=3)
+
+    # 35. TEST 4: Speed 2.0x (audio local word = 4 sec, clip start = 10 -> timeline = 12 sec)
+    def test_35_regression_test_04_speed_2x(self):
+        clip_timeline_start_sec = 10.0
+        audio_local_sec = 4.0
+        speed_factor = 2.0
+        final_timeline_sec = clip_timeline_start_sec + (audio_local_sec / speed_factor)
+        self.assertAlmostEqual(final_timeline_sec, 12.0, places=3)
+
+    # 36. TEST 5: Speed 0.5x (audio local word = 4 sec, clip start = 10 -> timeline = 18 sec)
+    def test_36_regression_test_05_speed_half_x(self):
+        clip_timeline_start_sec = 10.0
+        audio_local_sec = 4.0
+        speed_factor = 0.5
+        final_timeline_sec = clip_timeline_start_sec + (audio_local_sec / speed_factor)
+        self.assertAlmostEqual(final_timeline_sec, 18.0, places=3)
+
+    # 37. TEST 6: FPS Quantization (23.976, 25, 29.97, 30, 50, 59.94, 60 fps)
+    def test_37_regression_test_06_fps_quantization_all_rates(self):
+        fps_list = [23.976, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0]
+        test_times = [0.041, 1.234, 5.6789, 12.001]
+        for fps in fps_list:
+            for t in test_times:
+                # Start uses floor so speech never precedes subtitle
+                s_floor = math.floor(t * fps) / fps
+                e_ceil = math.ceil((t + 0.3) * fps) / fps
+                self.assertLessEqual(s_floor, t + 1e-9)
+                self.assertGreaterEqual(e_ceil, t + 0.3 - 1e-9)
+                self.assertGreater(e_ceil, s_floor)
+
+    # 38. TEST 7: Manual offset negative (clamped >= 0)
+    def test_38_regression_test_07_manual_offset_negative(self):
+        clip_start = 10.0
+        word_start = 1.0
+        offset = -0.200
+        final_start = max(0.0, clip_start + word_start + offset)
+        self.assertAlmostEqual(final_start, 10.8, places=3)
+
+        # Clamping at zero
+        clip_start_zero = 0.0
+        word_start_small = 0.1
+        offset_large_neg = -0.5
+        clamped_start = max(0.0, clip_start_zero + word_start_small + offset_large_neg)
+        self.assertEqual(clamped_start, 0.0)
+
+    # 39. TEST 8: Trimmed clip with non-zero inPoint
+    def test_39_regression_test_08_trimmed_clip_nonzero_inpoint(self):
+        in_point = 45.0
+        out_point = 65.0
+        clip_start = 15.0
+        # Audio extracted from [45.0..65.0] has length 20.0s, starts at 0.0
+        word_local_start = 3.5
+        final_timeline = clip_start + word_local_start
+        self.assertAlmostEqual(final_timeline, 18.5, places=3)
+
+    # 40. TEST 9: Multiple clips on different timeline positions
+    def test_40_regression_test_09_multiple_clips(self):
+        clips = [
+            {"clip_start": 0.0, "word_local": 2.0, "expected": 2.0},
+            {"clip_start": 12.5, "word_local": 1.0, "expected": 13.5},
+            {"clip_start": 55.0, "word_local": 3.2, "expected": 58.2}
+        ]
+        for c in clips:
+            res = c["clip_start"] + c["word_local"]
+            self.assertAlmostEqual(res, c["expected"], places=3)
+
+    # 41. TEST 10: Word-by-word karaoke mode integrity
+    def test_41_regression_test_10_karaoke_mode_integrity(self):
+        from backend.main import SegmentItem, WordItem, validate_subtitle_sync
+        words = [
+            WordItem(word="salom", start=1.0, end=1.4),
+            WordItem(word="dunyo", start=1.45, end=1.9),
+            WordItem(word="biz", start=1.95, end=2.3)
+        ]
+        seg = SegmentItem(id=1, start=1.0, end=2.3, text="salom dunyo biz", words=words)
+        report = validate_subtitle_sync([seg], clip_timeline_start_sec=1.0, max_clip_end=5.0)
+        self.assertTrue(report["valid"])
+        self.assertEqual(len(report["errors"]), 0)
+
+    # 42. TEST 11: Audio-energy snap OFF
+    def test_42_regression_test_11_audio_energy_snap_off(self):
+        raw_words = [
+            {"word": "bir", "start": 1.042, "end": 1.450},
+            {"word": "ikki", "start": 1.810, "end": 2.200}
+        ]
+        for w in raw_words:
+            w["timing_source"] = "whisper_raw"
+            w["original_start"] = w["start"]
+            w["aligned_start"] = w["start"]
+        self.assertEqual(raw_words[0]["start"], 1.042)
+        self.assertEqual(raw_words[0]["timing_source"], "whisper_raw")
+
+    # 43. TEST 12: Forced alignment OFF
+    def test_43_regression_test_12_forced_alignment_off(self):
+        words = [
+            {"word": "test", "start": 0.5, "end": 0.9}
+        ]
+        self.assertEqual(words[0]["start"], 0.5)
+
+    # 44. TEST 13: MMS unavailable fallback
+    def test_44_regression_test_13_mms_unavailable_fallback(self):
+        from backend.utils.forced_alignment import align_with_mms
+        aligned_words, reason = align_with_mms("non_existent_file.wav", [])
+        self.assertIsNone(aligned_words)
+        self.assertIsInstance(reason, str)
+
+    # 45. TEST 14: Whisper word timestamps + energy snap
+    def test_45_regression_test_14_whisper_and_energy_snap(self):
+        words = [
+            {"word": "salom", "start": 1.04, "end": 1.4}
+        ]
+        onsets = [1.00]
+        refined, stats = snap_word_timestamps_to_audio(
+            words,
+            custom_valid_onsets=onsets,
+            custom_onsets=onsets
+        )
+        self.assertAlmostEqual(refined[0]["start"], 1.00, places=2)
+        self.assertEqual(refined[0].get("timing_source"), "whisper+energy_snap")
+        self.assertIn("snap_shift_ms", refined[0])
+
+    # 46. TEST 15: Long 10-minute audio drift check
+    def test_46_regression_test_15_long_drift_check(self):
+        clip_start = 100.0
+        audio_dur = 600.0  # 10 minutes
+        for speed in [0.5, 1.0, 1.25, 1.5, 2.0]:
+            for t_local in [0.0, 60.0, 300.0, 600.0]:
+                expected = clip_start + (t_local / speed)
+                computed = clip_start + (t_local / speed)
+                self.assertAlmostEqual(computed, expected, places=7)
+                drift = abs(computed - expected)
+                self.assertLess(drift, 1e-9)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

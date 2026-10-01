@@ -59,7 +59,7 @@ node tests/test_word_timing.js
 if errorlevel 1 exit /b 1
 
 echo.
-echo [11/12] Audio Aligner va Global Offset Python Testlari (tests/test_audio_align.py) - 31 ta tekshiruv...
+echo [11/12] Audio Aligner va Global Offset Python Testlari (tests/test_audio_align.py) - 46 ta tekshiruv...
 %PYTHON_CMD% tests/test_audio_align.py
 if errorlevel 1 exit /b 1
 
@@ -71,5 +71,5 @@ if errorlevel 1 exit /b 1
 echo.
 echo ======================================================================
 echo    BARCHA 12 TA TEST TO'PLAMI MUVAFFAQIYATLI O'TDI!
-echo    JAMI: 510 TA TEKSHIRUV - 100%% YASHIL!
+echo    JAMI: 525 TA TEKSHIRUV - 100%% YASHIL!
 echo ======================================================================

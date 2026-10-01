@@ -11,6 +11,7 @@ O'zbek tili holati:
 
 import os
 from typing import List, Dict, Any, Optional, Tuple
+import numpy as np
 
 try:
     import torch
@@ -142,6 +143,43 @@ def align_with_mms(
                     "confidence": 0.5,
                     "pause_after_ms": 0.0
                 })
+
+        # 1. Coverage tekshiruvi: kamida 70% so'z yuqori ishonch bilan mos tushishi shart
+        matched_count = sum(1 for aw in aligned_words if aw.get("confidence", 0) >= 0.9)
+        coverage = matched_count / max(1, len(words))
+        if coverage < 0.70:
+            return None, f"MMS qamrovi yetarli emas ({coverage * 100:.1f}% < 70%). Whisper vaqtlariga qaytildi."
+
+        # 2. Monotonlik tekshiruvi (start vaqtlari o'suvchi tartibda bo'lishi shart)
+        for i in range(len(aligned_words) - 1):
+            if aligned_words[i]["start"] > aligned_words[i + 1]["start"]:
+                return None, "MMS vaqtlari monoton emas. Whisper vaqtlariga qaytildi."
+
+        # 3. Audio davomiyligi chegarasi tekshiruvi
+        audio_dur = waveform.size(1) / float(sample_rate)
+        for aw in aligned_words:
+            if aw["start"] > audio_dur + 0.3:
+                return None, f"MMS vaqti audio davomiyligidan ({audio_dur:.2f}s) tashqariga chiqdi."
+
+        # 4. Asl Whisper start vaqtlaridan o'rtacha chetlanish (katta sakrashlardan himoya)
+        shifts = []
+        for idx, aw in enumerate(aligned_words):
+            orig_s = float(words[idx].get("start", 0.0) if isinstance(words[idx], dict) else getattr(words[idx], "start", 0.0))
+            shifts.append(abs(aw["start"] - orig_s))
+        if shifts and float(np.mean(shifts)) > 1.5:
+            return None, f"MMS o'rtacha siljishi juda katta ({float(np.mean(shifts)):.2f}s > 1.5s)."
+
+        # Kanonik metama'lumotlarni o'rnatish
+        for idx, aw in enumerate(aligned_words):
+            orig_s = float(words[idx].get("start", 0.0) if isinstance(words[idx], dict) else getattr(words[idx], "start", 0.0))
+            orig_e = float(words[idx].get("end", orig_s + 0.3) if isinstance(words[idx], dict) else getattr(words[idx], "end", orig_s + 0.3))
+            aw["raw_start"] = orig_s
+            aw["raw_end"] = orig_e
+            aw["original_start"] = orig_s
+            aw["aligned_start"] = aw["start"]
+            aw["timing_source"] = "mms_fa"
+            aw["timing_confidence"] = aw.get("confidence", 1.0)
+            aw["snap_shift_ms"] = round(abs(aw["start"] - orig_s) * 1000.0, 1)
 
         return aligned_words, "torchaudio_mms"
 

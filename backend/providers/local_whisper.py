@@ -114,13 +114,21 @@ class LocalWhisperProvider(BaseSTTProvider):
                     clean_w = w.word.strip()
                     if clean_w:
                         prob = round(w.probability, 3) if hasattr(w, "probability") else 1.0
+                        w_start = round(w.start, 3)
+                        w_end = round(w.end, 3)
                         word_items.append(
                             WordItem(
                                 word=clean_w,
-                                start=round(w.start, 3),
-                                end=round(w.end, 3),
+                                start=w_start,
+                                end=w_end,
                                 score=prob,
                                 confidence=prob,
+                                original_start=w_start,
+                                aligned_start=w_start,
+                                raw_start=w_start,
+                                raw_end=w_end,
+                                timing_source="whisper",
+                                timing_confidence=prob,
                                 pause_after_ms=0.0
                             )
                         )
@@ -132,12 +140,22 @@ class LocalWhisperProvider(BaseSTTProvider):
                     s_dur = max(0.2, seg.end - seg.start)
                     w_dur = s_dur / len(raw_words)
                     for idx, rw in enumerate(raw_words):
+                        cw_start = round(seg.start + idx * w_dur, 3)
+                        cw_end = round(seg.start + (idx + 1) * w_dur, 3)
                         word_items.append(
                             WordItem(
                                 word=rw,
-                                start=round(seg.start + idx * w_dur, 3),
-                                end=round(seg.start + (idx + 1) * w_dur, 3),
-                                score=0.9
+                                start=cw_start,
+                                end=cw_end,
+                                score=0.6,
+                                confidence=0.6,
+                                original_start=cw_start,
+                                aligned_start=cw_start,
+                                raw_start=cw_start,
+                                raw_end=cw_end,
+                                timing_source="interpolated",
+                                timing_confidence=0.5,
+                                pause_after_ms=0.0
                             )
                         )
 
@@ -158,5 +176,6 @@ class LocalWhisperProvider(BaseSTTProvider):
             text=" ".join(full_text_parts),
             language=info.language if hasattr(info, "language") else language,
             duration=round(info.duration, 3) if hasattr(info, "duration") else 0.0,
-            segments=segments_list
+            segments=segments_list,
+            timestamp_origin="audio_local"
         )

@@ -447,7 +447,10 @@ function initTranscribeSection() {
 
                     const clipTimelineStart = (typeof c.start === "number") ? c.start : 0.0;
                     const clipTimelineEnd = (typeof c.end === "number") ? c.end : (typeof c.outPoint === "number" && typeof c.inPoint === "number" ? (clipTimelineStart + (c.outPoint - c.inPoint)) : (c.duration ? (clipTimelineStart + c.duration) : null));
-                    const clipTimelineSpeed = (typeof c.speed === "number" && c.speed > 0) ? c.speed : 1.0;
+                    let clipTimelineSpeed = (typeof c.speed === "number" && c.speed > 0) ? c.speed : 1.0;
+                    if (clipTimelineSpeed > 10.0) {
+                        clipTimelineSpeed = clipTimelineSpeed / 100.0;
+                    }
 
                     const options = {
                         filePath: c.filePath || null,
@@ -468,7 +471,7 @@ function initTranscribeSection() {
                         clipSpeed: clipTimelineSpeed,
                         fps: seqFps,
                         syncOffsetMs: syncOffsetMsVal,
-                        timelineOffsetMs: syncOffsetMsVal
+                        timelineOffsetMs: 0.0
                     };
 
                     const result = await window.SubtitleAPI.transcribe(options);
@@ -480,6 +483,33 @@ function initTranscribeSection() {
                     if (result && result.diagnostics) {
                         const diag = result.diagnostics;
                         const alignMethod = diag.alignment_method || "";
+                        const timingQuality = diag.timing_quality || "High";
+                        
+                        const waveformStatsBadge = document.getElementById("waveformStatsBadge");
+                        if (waveformStatsBadge) {
+                            let engLabel = "Whisper";
+                            if (alignMethod.indexOf("torchaudio_mms_fa") !== -1) engLabel = "MMS Alignment";
+                            else if (alignMethod.indexOf("local_whisper_measured") !== -1) engLabel = "Lokal O'lchov";
+                            else if (diag.global_offset_applied) engLabel = "Whisper + Snap";
+                            else if (timingQuality === "Fallback") engLabel = "Fallback";
+
+                            waveformStatsBadge.textContent = `Sifat: ${timingQuality} | ${engLabel}`;
+                            if (timingQuality === "High") {
+                                waveformStatsBadge.style.background = "rgba(34, 197, 94, 0.2)";
+                                waveformStatsBadge.style.color = "#4ade80";
+                            } else if (timingQuality === "Medium") {
+                                waveformStatsBadge.style.background = "rgba(245, 158, 11, 0.2)";
+                                waveformStatsBadge.style.color = "#fbbf24";
+                            } else {
+                                waveformStatsBadge.style.background = "rgba(239, 68, 68, 0.2)";
+                                waveformStatsBadge.style.color = "#f87171";
+                            }
+                        }
+
+                        if (timingQuality === "Fallback") {
+                            console.warn("⚠️ So'z vaqtlari audio orqali to'liq o'lchanmadi (fallback ishlatildi).");
+                        }
+
                         if (alignMethod.indexOf("local_whisper_measured") !== -1) {
                             const measMsg = "🎯 So'z vaqtlari audio orqali O'LCHANDI: lokal Whisper o'lchovi";
                             console.log(measMsg);
@@ -496,6 +526,14 @@ function initTranscribeSection() {
                             console.log(lagMsg);
                             if (progressStatus) progressStatus.textContent = lagMsg;
                         }
+
+                        if (diag.first_10_words && Array.isArray(diag.first_10_words)) {
+                            console.log("--- TIMING TRACE (FIRST 10 WORDS) ---");
+                            diag.first_10_words.forEach(tw => {
+                                console.log(`WORD: "${tw.word}" | raw: ${tw.raw_start}s | aligned: ${tw.aligned_start}s | snapped: ${tw.snapped_start}s | timeline: ${tw.timeline_start}s | source: ${tw.timing_source}`);
+                            });
+                            console.log("-------------------------------------");
+                        }
                     }
                     if (result.status === "success" && result.segments) {
                         const offsetAlreadyApplied = result.offset_applied === true;
@@ -509,9 +547,14 @@ function initTranscribeSection() {
                                 end: Number((w.end + addOffset).toFixed(3)),
                                 raw_start: (w.raw_start !== undefined) ? w.raw_start : w.start,
                                 raw_end: (w.raw_end !== undefined) ? w.raw_end : w.end,
+                                aligned_start: w.aligned_start !== undefined ? w.aligned_start : undefined,
+                                original_start: w.original_start !== undefined ? w.original_start : undefined,
                                 clamped: w.clamped === true,
                                 score: w.score !== undefined ? w.score : 1.0,
                                 confidence: w.confidence !== undefined ? w.confidence : (w.score !== undefined ? w.score : 1.0),
+                                timing_source: w.timing_source || "whisper",
+                                timing_confidence: w.timing_confidence !== undefined ? w.timing_confidence : 1.0,
+                                snap_shift_ms: w.snap_shift_ms !== undefined ? w.snap_shift_ms : 0.0,
                                 pause_after_ms: w.pause_after_ms !== undefined ? w.pause_after_ms : 0
                             }));
 
@@ -520,6 +563,8 @@ function initTranscribeSection() {
                                 start: sStart,
                                 end: sEnd,
                                 text: seg.text,
+                                timebase: "timeline",
+                                offset_applied: true,
                                 words: shiftedWords
                             });
                         }
@@ -983,6 +1028,10 @@ function initPresetsSection() {
 
     window.setWordSyncOffset = function(ms) {
         updateSyncOffsetUI(ms);
+    };
+
+    window.resetWordSyncOffset = function() {
+        updateSyncOffsetUI(0);
     };
 
     if (rangeSyncOffsetMs) {

@@ -536,10 +536,16 @@ function extractClipInfo(clip) {
     try {
         if (typeof clip.getSpeed === "function") {
             var sp = clip.getSpeed();
-            if (sp && sp > 0) clipSpeed = sp;
+            if (sp && sp > 0) {
+                if (sp > 10.0) {
+                    sp = sp / 100.0;
+                }
+                clipSpeed = sp;
+            }
         }
     } catch (spErr) {}
     if (isNaN(clipSpeed) || clipSpeed <= 0) clipSpeed = 1.0;
+    if (clipSpeed > 10.0) clipSpeed = clipSpeed / 100.0;
 
     var cleanP = String(p).replace(/\\/g, "/");
     var cleanN = clip.name ? String(clip.name).replace(/\s*\[[VA0-9\s]+\]\s*$/i, "").replace(/^\s+|\s+$/g, "") : cleanP.split("/").pop();
@@ -934,6 +940,7 @@ function ppro_getTimeDiagnostics() {
         var endSec = clipInfo ? clipInfo.end : 0;
         var durSec = clipInfo ? clipInfo.duration : 0;
         var speedVal = clipInfo ? (clipInfo.speed || 1.0) : 1.0;
+        if (speedVal > 10.0) speedVal = speedVal / 100.0;
         var mediaPath = clipInfo ? (clipInfo.filePath || "") : "";
 
         var diag = {

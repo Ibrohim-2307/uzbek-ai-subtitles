@@ -236,6 +236,66 @@ def resolve_media_file_on_disk(name_or_path: str) -> Optional[str]:
     return None
 
 
+def validate_subtitle_sync(
+    segments: List[SegmentItem],
+    clip_timeline_start_sec: float,
+    max_clip_end: Optional[float] = None
+) -> Dict[str, Any]:
+    """
+    Subtitr va so'z vaqtlarining fizik, matematik va timeline mosligini tekshiradi (Quality Validator).
+    Tekshiruvlar:
+    - start >= 0
+    - start < end
+    - vaqtlar monotonligi (non-decreasing)
+    - segment chegarasi birinchi va oxirgi so'zga mosligi
+    - impossible overlap / bounds tekshiruvi
+    """
+    issues = []
+    is_monotonic = True
+    prev_w_start = clip_timeline_start_sec - 0.001
+
+    total_words = 0
+    for s_idx, seg in enumerate(segments):
+        if seg.start < 0:
+            issues.append(f"Segment #{s_idx + 1} boshlanishi manfiy: {seg.start}s")
+        if seg.end <= seg.start:
+            issues.append(f"Segment #{s_idx + 1} tugashi boshlanishidan kichik: {seg.start}s -> {seg.end}s")
+        if seg.words:
+            if abs(seg.start - seg.words[0].start) > 0.005:
+                issues.append(f"Segment #{s_idx + 1} start so'z startiga mos emas: {seg.start}s != {seg.words[0].start}s")
+            if abs(seg.end - seg.words[-1].end) > 0.005:
+                issues.append(f"Segment #{s_idx + 1} end oxirgi so'z endiga mos emas: {seg.end}s != {seg.words[-1].end}s")
+
+            for w_idx, w in enumerate(seg.words):
+                total_words += 1
+                if w.start < 0:
+                    issues.append(f"So'z '{w.word}' boshlanishi manfiy: {w.start}s")
+                if w.end <= w.start:
+                    issues.append(f"So'z '{w.word}' davomiyligi noo'rin: {w.start}s -> {w.end}s")
+                if w.start < prev_w_start:
+                    is_monotonic = False
+                    issues.append(f"So'z '{w.word}' monotonlikni buzdi: {w.start}s < {prev_w_start}s")
+                prev_w_start = w.start
+
+    quality = "HIGH"
+    if not is_monotonic or len(issues) > 3:
+        quality = "FALLBACK"
+    elif len(issues) > 0:
+        quality = "MEDIUM"
+
+    return {
+        "valid": len(issues) == 0,
+        "quality": quality,
+        "is_monotonic": is_monotonic,
+        "total_words_validated": total_words,
+        "issues_count": len(issues),
+        "issues": issues[:5],
+        "errors": issues[:5],
+        "warnings": [],
+        "passed": len(issues) == 0
+    }
+
+
 @app.post("/transcribe")
 async def transcribe_audio(
     file_path: Optional[str] = Form(None),
@@ -521,35 +581,59 @@ async def transcribe_audio(
                 global_seg_id += 1
 
         # 6. Klip Speed (Tezlik), Timeline Offset, Clamping va Kadr tezligiga (FPS) moslash
+        # CANONICAL COORDINATE DEFINITIONS:
+        # source_in_sec: source media ichidagi in_point
+        # audio_local_sec: 0-based trimmed WAV ichidagi vaqt (Whisper/FA qaytargan)
+        # clip_timeline_start_sec: klipning Premiere/AE timeline'idagi boshlanish nuqtasi
+        # manual_sync_offset_sec: foydalanuvchi qo'lda kiritgan siljitish (sync_offset_ms / 1000.0)
+        # final_timeline_sec: timeline'dagi yakuniy vaqt
+
+        source_in_sec = float(start_sec) if (start_sec is not None and start_sec > 0) else 0.0
+        clip_timeline_start_sec = float(clip_start) if (clip_start is not None) else 0.0
+
+        # DOUBLE OFFSET HIMOYASI: Agar clip_start berilgan bo'lsa, timeline_offset_ms qayta qo'shilmasin!
+        if timeline_offset_ms and clip_start is None:
+            clip_timeline_start_sec = float(timeline_offset_ms) / 1000.0
+
+        manual_sync_offset_sec = (float(sync_offset_ms) / 1000.0) if (sync_offset_ms is not None and sync_offset_ms != 0) else 0.0
+
         speed_factor = float(clip_speed) if (clip_speed and clip_speed > 0) else 1.0
-        tl_offset_sec = float(clip_start) if (clip_start is not None) else 0.0
-        if timeline_offset_ms:
-            tl_offset_sec += (float(timeline_offset_ms) / 1000.0)
-        sync_shift_sec = (float(sync_offset_ms) / 1000.0) if (sync_offset_ms is not None and sync_offset_ms != 0) else 0.0
-        total_time_shift = tl_offset_sec + sync_shift_sec
+        if speed_factor > 10.0:  # Host dastur foiz yuborgan bo'lsa (masalan: 100% -> 1.0)
+            speed_factor = speed_factor / 100.0
+
+        total_time_shift = clip_timeline_start_sec + manual_sync_offset_sec
 
         fps_val = float(fps) if (fps is not None and fps > 0) else 25.0
         frame_dur = 1.0 / fps_val
 
         # Klipning timeline'dagi maksimal tugash chegarasi (Clamping uchun)
-        max_clip_end = float(clip_end) if (clip_end is not None and clip_end > tl_offset_sec) else None
+        max_clip_end = float(clip_end) if (clip_end is not None and clip_end > clip_timeline_start_sec) else None
         if max_clip_end is None and duration_sec:
-            max_clip_end = tl_offset_sec + (duration_sec / speed_factor)
+            max_clip_end = clip_timeline_start_sec + (duration_sec / speed_factor)
 
-        def transform_time(t: float) -> float:
-            scaled = (t / speed_factor) + total_time_shift
-            quantized = round(round(scaled * fps_val) / fps_val, 3)
-            return quantized
+        # Subtitr boshlanishi kechikmasligi uchun frame floor, tugashi erta uzilmasligi uchun frame ceil
+        def transform_start_time(audio_local_sec: float) -> float:
+            scaled = (audio_local_sec / speed_factor) + total_time_shift
+            quantized = math.floor(round(scaled * fps_val, 6)) / fps_val
+            return round(quantized, 3)
+
+        def transform_end_time(audio_local_sec: float) -> float:
+            scaled = (audio_local_sec / speed_factor) + total_time_shift
+            quantized = math.ceil(round(scaled * fps_val, 6)) / fps_val
+            return round(quantized, 3)
 
         final_segments = []
+        first_10_words_trace = []
+        total_trace_count = 0
+
         for s in processed_segments:
             final_words = []
             for w in s.words:
-                orig_w_start = round(float(w.start), 3)
-                orig_w_end = round(float(w.end), 3)
+                orig_audio_local_start = round(float(w.start), 3)
+                orig_audio_local_end = round(float(w.end), 3)
 
-                t_w_start = transform_time(orig_w_start)
-                t_w_end = transform_time(orig_w_end)
+                t_w_start = transform_start_time(orig_audio_local_start)
+                t_w_end = transform_end_time(orig_audio_local_end)
 
                 # CLAMPING: Agar so'z boshlanishi klip tugash chegarasidan keyin bo'lsa -> tashlab yuborish
                 if max_clip_end is not None and t_w_start >= round(max_clip_end, 3):
@@ -560,8 +644,8 @@ async def transcribe_audio(
                     t_w_end = round(max_clip_end, 3)
                     is_clamped = True
 
-                if t_w_start < tl_offset_sec:
-                    t_w_start = tl_offset_sec
+                if t_w_start < clip_timeline_start_sec:
+                    t_w_start = clip_timeline_start_sec
 
                 if t_w_end <= t_w_start:
                     t_w_end = round(t_w_start + frame_dur, 3)
@@ -571,12 +655,37 @@ async def transcribe_audio(
                 if t_w_start >= t_w_end:
                     continue
 
+                w_raw_s = getattr(w, "raw_start", orig_audio_local_start)
+                w_raw_e = getattr(w, "raw_end", orig_audio_local_end)
+                w_orig_s = getattr(w, "original_start", orig_audio_local_start)
+                w_al_s = getattr(w, "aligned_start", orig_audio_local_start)
+                w_src = getattr(w, "timing_source", "whisper")
+                w_conf = getattr(w, "timing_confidence", 1.0)
+                w_snap_shift = getattr(w, "snap_shift_ms", 0.0)
+
                 w.start = t_w_start
                 w.end = t_w_end
-                w.raw_start = orig_w_start
-                w.raw_end = orig_w_end
+                w.raw_start = w_raw_s
+                w.raw_end = w_raw_e
+                w.original_start = w_orig_s
+                w.aligned_start = w_al_s
+                w.final_start = t_w_start
+                w.timing_source = w_src
+                w.timing_confidence = w_conf
+                w.snap_shift_ms = w_snap_shift
                 w.clamped = is_clamped
                 final_words.append(w)
+
+                if total_trace_count < 10:
+                    first_10_words_trace.append({
+                        "word": w.word,
+                        "raw": round(float(w_raw_s), 3),
+                        "aligned": round(float(w_al_s), 3),
+                        "snapped": orig_audio_local_start,
+                        "timeline": t_w_start,
+                        "source": w_src
+                    })
+                    total_trace_count += 1
 
             if not final_words:
                 continue
@@ -588,9 +697,16 @@ async def transcribe_audio(
 
         processed_segments = final_segments
 
+        # Sifat va sinxronlik validatorini yuritish
+        validation_report = validate_subtitle_sync(
+            processed_segments,
+            clip_timeline_start_sec=clip_timeline_start_sec,
+            max_clip_end=max_clip_end
+        )
+
         full_clean_text = " ".join([s.text.replace("\n", " ") for s in processed_segments])
 
-        # Diagnostika ma'lumotlari (so'zlar soni, vaqt oralig'i, rejim)
+        # Diagnostika ma'lumotlari
         total_words_count = sum(len(s.words) for s in processed_segments)
         first_w_time = processed_segments[0].words[0].start if (processed_segments and processed_segments[0].words) else (processed_segments[0].start if processed_segments else 0.0)
         last_w_time = processed_segments[-1].words[-1].end if (processed_segments and processed_segments[-1].words) else (processed_segments[-1].end if processed_segments else 0.0)
@@ -600,13 +716,16 @@ async def transcribe_audio(
             "total_words": total_words_count,
             "first_word_time": first_w_time,
             "last_word_time": last_w_time,
-            "clip_start": tl_offset_sec,
+            "clip_start": clip_timeline_start_sec,
             "clip_end": max_clip_end,
             "clip_speed": speed_factor,
             "sync_offset_ms": sync_offset_ms or 0.0,
             "fps_quantized": fps_val,
             "audio_spec": "16000Hz mono WAV",
+            "timestamp_origin": "audio_local",
             "alignment_method": alignment_method_used,
+            "timing_quality": validation_report["quality"],
+            "validation": validation_report,
             "snapped_words_count": align_stats.get("snapped_count", 0),
             "avg_shift_ms": align_stats.get("avg_shift_ms", 0.0),
             "max_shift_ms": align_stats.get("max_shift_ms", 0.0),
@@ -614,9 +733,16 @@ async def transcribe_audio(
             "global_offset_sec": align_stats.get("global_offset_sec", 0.0),
             "global_offset_ms": align_stats.get("global_offset_ms", 0.0),
             "global_offset_applied": align_stats.get("global_offset_applied", False),
-            "support_count": align_stats.get("support_count", 0)
+            "support_count": align_stats.get("support_count", 0),
+            "first_10_words_trace": first_10_words_trace
         }
-        print(f"[Transcribe Diagnostics] Jami {total_words_count} ta so'z aniqlandi ({first_w_time}s -> {last_w_time}s, Metod: {alignment_method_used}, Offset: {tl_offset_sec}s, Speed: {speed_factor}x, Clamped End: {max_clip_end}s)")
+
+        print(f"[Transcribe Diagnostics] Jami {total_words_count} ta so'z ({first_w_time}s -> {last_w_time}s, Sifat: {validation_report['quality']}, Metod: {alignment_method_used}, Offset: {clip_timeline_start_sec}s, Speed: {speed_factor}x)")
+        if first_10_words_trace:
+            print("----- TIMING TRACE (BIRINCHI 10 TA SO'Z) -----")
+            for tr in first_10_words_trace:
+                print(f"WORD: {tr['word']:<14} | raw: {tr['raw']:<6} | aligned: {tr['aligned']:<6} | timeline: {tr['timeline']:<6} | src: {tr['source']}")
+            print("-----------------------------------------------")
 
         return {
             "status": "success",
@@ -624,7 +750,7 @@ async def transcribe_audio(
             "duration": transcription.duration,
             "full_text": full_clean_text,
             "offset_applied": True,
-            "clip_start": tl_offset_sec,
+            "clip_start": clip_timeline_start_sec,
             "clip_end": max_clip_end,
             "clip_speed": speed_factor,
             "fps": fps_val,
