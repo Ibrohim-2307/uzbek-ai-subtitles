@@ -860,7 +860,9 @@ def chunk_words_by_pause(
         pause_sec = curr_start - prev_end
         has_pause = pause_sec >= pause_threshold
 
-        natural_split = (curr_chars >= min_chunk_chars) and (has_sentence_end or has_clause_end or has_pause)
+        # Pauza (>= 0.25-0.35s) har doim qat'iy tabiiy chegara hisoblanadi;
+        # Tinish belgilari esa bo'lak minimal hajmga yetganda bo'ladi
+        natural_split = has_pause or ((curr_chars >= min_chunk_chars) and (has_sentence_end or has_clause_end))
 
         if natural_split:
             chunks.append(curr_chunk)
@@ -871,16 +873,20 @@ def chunk_words_by_pause(
     if curr_chunk:
         chunks.append(curr_chunk)
 
-    # Yetim so'z (orphan chunk) birlashtirish:
+    # Yetim so'z (orphan chunk) birlashtirish (faqat agar oraliqda pauza bo'lmasa!):
     if len(chunks) >= 2:
         last_c = chunks[-1]
         last_len = chunk_char_len(last_c)
         if last_len < min_chunk_chars:
             prev_c = chunks[-2]
-            combined_len = chunk_char_len(prev_c) + 1 + last_len
-            if combined_len <= max_total_chars:
-                chunks[-2] = prev_c + last_c
-                chunks.pop()
+            prev_c_end = float(_get_w_prop(prev_c[-1], "end", 0.0) or 0.0)
+            last_c_start = float(_get_w_prop(last_c[0], "start", 0.0) or 0.0)
+            # Pauza mavjud bo'lsa, yetim so'z aslo oldingi bo'lakka qo'shilmasin!
+            if (last_c_start - prev_c_end) < pause_threshold:
+                combined_len = chunk_char_len(prev_c) + 1 + last_len
+                if combined_len <= max_total_chars:
+                    chunks[-2] = prev_c + last_c
+                    chunks.pop()
 
     return chunks
 

@@ -260,6 +260,27 @@ test("Word start binding va rechunkSegments yangi qoidasi", () => {
     assert.strictEqual(rechunked[1].words[0].word, "gaplashamiz");
 });
 
+// 17. Qisqa so'z ortidan pauza kelganda majburiy bo'linishi va yetim so'z pauzada qo'shilmasligi
+test("Qisqa so'z ortidan pauza kelganda majburiy bo'linishi va yetim so'z pauzada qo'shilmasligi", () => {
+    const words = [
+        { word: "Men", start: 0.1, end: 0.4 },
+        { word: "keldim", start: 1.5, end: 1.9 }
+    ];
+    const chunks = UzbekUtils.chunkWordsSmart(words, { pauseThreshold: 0.35 });
+    assert.strictEqual(chunks.length, 2);
+    assert.strictEqual(chunks[0][0].word, "Men");
+    assert.strictEqual(chunks[1][0].word, "keldim");
+
+    const orphanWords = [
+        { word: "Bugun", start: 0.0, end: 0.3 },
+        { word: "ishladik.", start: 0.35, end: 0.7 },
+        { word: "ha", start: 1.5, end: 1.7 } // 0.8s pauza
+    ];
+    const orphanChunks = UzbekUtils.chunkWordsSmart(orphanWords, { pauseThreshold: 0.35 });
+    assert.strictEqual(orphanChunks.length, 2);
+    assert.strictEqual(orphanChunks[1][0].word, "ha");
+});
+
 console.log(`\n=======================================================`);
 console.log(`🎉 BARCHA UZBEK UTILS TESTLARI (${passCount} ta guruh) MUVAFFAQIYATLI O'TDI!`);
 console.log(`=======================================================`);

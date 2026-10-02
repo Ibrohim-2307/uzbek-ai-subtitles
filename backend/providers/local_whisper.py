@@ -93,8 +93,13 @@ class LocalWhisperProvider(BaseSTTProvider):
             task="transcribe",
             word_timestamps=True,
             condition_on_previous_text=False,
-            vad_filter=True,
-            vad_parameters=dict(threshold=0.35, min_silence_duration_ms=400, speech_pad_ms=300),
+            vad_filter=kwargs.get("vad_filter", True),
+            vad_parameters=dict(
+                threshold=0.22,
+                min_speech_duration_ms=100,
+                min_silence_duration_ms=300,
+                speech_pad_ms=400
+            ),
             beam_size=kwargs.get("beam_size", 5),
             temperature=kwargs.get("temperature", 0.0)
         )

@@ -335,6 +335,29 @@ class TestUzbekNLP(unittest.TestCase):
         self.assertEqual(len(chunks), 1)
         self.assertEqual([w["word"] for w in chunks[0]], ["Bu", "katta", "mavzu;", "ha"])
 
+    def test_39_chunk_words_short_word_pause_split(self):
+        # Qisqa so'z (3 belgi) ortidan pauza kelganda majburiy bo'linishi
+        words = [
+            {"word": "Men", "start": 0.1, "end": 0.4},
+            {"word": "keldim", "start": 1.5, "end": 1.9}
+        ]
+        chunks = chunk_words_by_pause(words, pause_threshold=0.35)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual([w["word"] for w in chunks[0]], ["Men"])
+        self.assertEqual([w["word"] for w in chunks[1]], ["keldim"])
+
+    def test_40_chunk_words_orphan_no_merge_across_pause(self):
+        # Yetim so'z pauza orqali ajralgan bo'lsa, oldingi bo'lakka qo'shilmasligi
+        words = [
+            {"word": "Bugun", "start": 0.0, "end": 0.3},
+            {"word": "ishladik.", "start": 0.35, "end": 0.7},
+            {"word": "ha", "start": 1.5, "end": 1.7}  # 0.8s pauza
+        ]
+        chunks = chunk_words_by_pause(words, pause_threshold=0.35)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual([w["word"] for w in chunks[0]], ["Bugun", "ishladik."])
+        self.assertEqual([w["word"] for w in chunks[1]], ["ha"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

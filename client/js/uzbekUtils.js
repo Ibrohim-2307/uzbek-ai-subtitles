@@ -821,7 +821,8 @@ const UzbekUtils = {
             const pauseSec = currStart - prevEnd;
             const hasPause = pauseSec >= pauseThreshold;
 
-            const naturalSplit = (currChars >= minChunkChars) && (hasSentenceEnd || hasClauseEnd || hasPause);
+            // Pauza (>= 0.25-0.35s) har doim qat'iy tabiiy chegara hisoblanadi
+            const naturalSplit = hasPause || ((currChars >= minChunkChars) && (hasSentenceEnd || hasClauseEnd));
 
             if (naturalSplit) {
                 chunks.push(currChunk);
@@ -835,16 +836,20 @@ const UzbekUtils = {
             chunks.push(currChunk);
         }
 
-        // Yetim so'z (orphan merge)
+        // Yetim so'z (orphan merge) - faqat agar oraliqda pauza bo'lmasa!
         if (chunks.length >= 2) {
             const lastC = chunks[chunks.length - 1];
             const lastLen = chunkCharLen(lastC);
             if (lastLen < minChunkChars) {
                 const prevC = chunks[chunks.length - 2];
-                const combinedLen = chunkCharLen(prevC) + 1 + lastLen;
-                if (combinedLen <= maxTotalChars) {
-                    chunks[chunks.length - 2] = prevC.concat(lastC);
-                    chunks.pop();
+                const prevEnd = parseFloat(prevC[prevC.length - 1].end) || 0.0;
+                const nextStart = parseFloat(lastC[0].start) || 0.0;
+                if ((nextStart - prevEnd) < pauseThreshold) {
+                    const combinedLen = chunkCharLen(prevC) + 1 + lastLen;
+                    if (combinedLen <= maxTotalChars) {
+                        chunks[chunks.length - 2] = prevC.concat(lastC);
+                        chunks.pop();
+                    }
                 }
             }
         }
@@ -944,8 +949,8 @@ const UzbekUtils = {
     buildWordPlan(segments, options = {}) {
         const fps = (options && options.fps > 0) ? options.fps : (this.getHostFps ? this.getHostFps() : 25.0);
         const maxLines = (options && options.maxLines > 0) ? Math.min(Math.max(1, parseInt(options.maxLines, 10)), 5) : 2;
-        const pauseHold = options && options.pauseHold !== undefined ? !!options.pauseHold : true;
-        const pauseThresholdSec = options && options.pauseThresholdSec !== undefined ? parseFloat(options.pauseThresholdSec) : 0.8;
+        const pauseHold = options && options.pauseHold !== undefined ? !!options.pauseHold : false;
+        const pauseThresholdSec = options && options.pauseThresholdSec !== undefined ? parseFloat(options.pauseThresholdSec) : 0.25;
         const inAnimDuration = options && options.inAnimDuration !== undefined ? parseFloat(options.inAnimDuration) : 0.12;
         const closeAnimDuration = options && options.closeAnimDuration !== undefined ? parseFloat(options.closeAnimDuration) : 0.10;
         const minWordDur = Math.max(1 / fps, options.minWordDuration || 0.08);

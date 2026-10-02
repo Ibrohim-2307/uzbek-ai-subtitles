@@ -484,8 +484,8 @@ function initTranscribeSection() {
                 const script = scriptSelect ? scriptSelect.value : "latin";
                 const convertNumbers = numToWordCheck ? numToWordCheck.checked : false;
                 const audioEnergySnap = checkSnap ? checkSnap.checked : true;
-                const pauseHideText = checkPauseHide ? checkPauseHide.checked : false;
-                const pauseHideThresholdMs = inputPauseThresh ? (parseInt(inputPauseThresh.value, 10) || 800) : 800;
+                const pauseHideText = checkPauseHide ? checkPauseHide.checked : true;
+                const pauseHideThresholdMs = inputPauseThresh ? (parseInt(inputPauseThresh.value, 10) || 250) : 250;
                 const charReveal = checkCharRev ? checkCharRev.checked : false;
 
                 const allSegments = [];
@@ -716,8 +716,8 @@ function initEditorSection() {
             const isWordByWord = document.getElementById("checkWordByWord")?.checked || false;
             const wordMode = document.getElementById("selectWordMode")?.value || "stack";
             const wordHighlight = document.getElementById("inputWordHighlightColor")?.value || "#ffe600";
-            const pauseHideText = document.getElementById("checkPauseHideText")?.checked || false;
-            const pauseHideThresholdMs = parseInt(document.getElementById("inputPauseHideThresholdMs")?.value, 10) || 800;
+            const pauseHideText = document.getElementById("checkPauseHideText") ? document.getElementById("checkPauseHideText").checked : true;
+            const pauseHideThresholdMs = parseInt(document.getElementById("inputPauseHideThresholdMs")?.value, 10) || 250;
             const res = await window.SubtitleAPI.exportSRT(
                 window.SubtitleEditor.segments,
                 null,
@@ -852,11 +852,11 @@ function initEditorSection() {
                 const wordAnim = document.getElementById("selectWordAnimation")?.value || "pop";
                 const wordHighlight = document.getElementById("inputWordHighlightColor")?.value || "#ffe600";
                 const syncOffsetMs = parseFloat(document.getElementById("inputSyncOffsetMs")?.value) || 0.0;
-                const pauseHideText = document.getElementById("checkPauseHideText")?.checked || false;
-                const pauseHideThresholdMs = parseInt(document.getElementById("inputPauseHideThresholdMs")?.value, 10) || 800;
+                const pauseHideText = document.getElementById("checkPauseHideText") ? document.getElementById("checkPauseHideText").checked : true;
+                const pauseHideThresholdMs = parseInt(document.getElementById("inputPauseHideThresholdMs")?.value, 10) || 250;
                 const charReveal = document.getElementById("checkCharReveal")?.checked || false;
                 const wordStackLines = parseInt(document.getElementById("inputWordStackLines")?.value, 10) || 2;
-                const wordPauseHold = document.getElementById("checkWordPauseHold") ? document.getElementById("checkWordPauseHold").checked : true;
+                const wordPauseHold = document.getElementById("checkWordPauseHold") ? document.getElementById("checkWordPauseHold").checked : false;
                 const wordStackMaxLayers = parseInt(document.getElementById("inputWordStackMaxLayers")?.value, 10) || 1200;
 
                 const customMaxLinesVal = parseInt(document.getElementById("customMaxLines")?.value, 10) || 2;

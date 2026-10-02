@@ -1719,14 +1719,24 @@ function ae_getSelectedLayerMediaPath() {
         // 2. Tanlov yo'q bo'lsa, butun kompozitsiyadagi audio qatlamni izlash
         var compFound = findAudioFootageInComp(comp, 0);
         if (compFound) {
+            var fbIn = compFound.layer ? parseFloat(compFound.layer.inPoint) || 0 : 0;
+            var fbOut = compFound.layer ? parseFloat(compFound.layer.outPoint) || comp.duration : comp.duration;
+            var fbStart = compFound.layer ? parseFloat(compFound.layer.startTime) || 0 : 0;
+            var fbSrcIn = Math.max(0, fbIn - fbStart);
+            var fbDur = (fbOut > fbIn) ? (fbOut - fbIn) : comp.duration;
             return JSON.stringify({
                 ok: true,
                 success: true,
                 filePath: compFound.filePath,
                 layerName: compFound.name,
-                inPoint: compFound.layer ? compFound.layer.inPoint : 0,
-                outPoint: compFound.layer ? compFound.layer.outPoint : comp.duration,
-                startTime: compFound.layer ? compFound.layer.startTime : 0
+                name: compFound.name,
+                inPoint: fbSrcIn,
+                outPoint: fbSrcIn + fbDur,
+                start: fbIn,
+                end: fbOut,
+                duration: fbDur,
+                offset: fbIn,
+                startTime: fbStart
             });
         }
 
@@ -1735,14 +1745,24 @@ function ae_getSelectedLayerMediaPath() {
             var lyr = comp.layer(j);
             if (lyr.adjustmentLayer) continue;
             if (lyr.source && lyr.source.file && lyr.source.file.exists) {
+                var lyrIn = parseFloat(lyr.inPoint) || 0;
+                var lyrOut = parseFloat(lyr.outPoint) || comp.duration;
+                var lyrStart = parseFloat(lyr.startTime) || 0;
+                var lyrSrcIn = Math.max(0, lyrIn - lyrStart);
+                var lyrDur = (lyrOut > lyrIn) ? (lyrOut - lyrIn) : comp.duration;
                 return JSON.stringify({
                     ok: true,
                     success: true,
                     filePath: lyr.source.file.fsName,
                     layerName: lyr.name,
-                    inPoint: lyr.inPoint,
-                    outPoint: lyr.outPoint,
-                    startTime: lyr.startTime
+                    name: lyr.name,
+                    inPoint: lyrSrcIn,
+                    outPoint: lyrSrcIn + lyrDur,
+                    start: lyrIn,
+                    end: lyrOut,
+                    duration: lyrDur,
+                    offset: lyrIn,
+                    startTime: lyrStart
                 });
             }
         }
@@ -2168,8 +2188,11 @@ function ae_createSubtitles(payloadJson) {
                                 textProp.setValueAtTime(wTime, textDoc);
                             }
 
-                            // Pauzada matnni yashirish (agar yoqilgan bo'lsa va pauza chegaradan katta bo'lsa)
-                            if (pauseHideText && pauseAfter >= pauseThresholdSec) {
+                            // Pauzada matnni yashirish (agar yoqilgan bo'lsa yoki oraliqda haqiqiy pauza bo'lsa)
+                            var nextAccObj = (wIdx + 1 < seg.words.length) ? seg.words[wIdx + 1] : null;
+                            var nextAccStart = nextAccObj ? (parseFloat(nextAccObj.start) + totalOffset) : sEnd;
+                            var gapAccNext = nextAccStart - wEndTime;
+                            if ((pauseHideText && pauseAfter >= pauseThresholdSec) || gapAccNext >= 0.25 || (!nextAccObj && sEnd > wEndTime + 0.15)) {
                                 textDoc.text = "";
                                 textProp.setValueAtTime(wEndTime, textDoc);
                             }
@@ -2195,8 +2218,11 @@ function ae_createSubtitles(payloadJson) {
                                 textProp.setValueAtTime(swTime, textDoc);
                             }
 
-                            // Pauzada matnni yashirish
-                            if (pauseHideText && swPauseAfter >= pauseThresholdSec) {
+                            // So'z tugaganda matnni darhol tozalash (sukutda ekranda qolib ketmasligi uchun):
+                            var nextWordObj = (sIdx + 1 < seg.words.length) ? seg.words[sIdx + 1] : null;
+                            var nextWordStart = nextWordObj ? (parseFloat(nextWordObj.start) + totalOffset) : sEnd;
+                            var gapToNext = nextWordStart - swEndTime;
+                            if (pauseHideText || gapToNext >= 0.18 || !nextWordObj) {
                                 textDoc.text = "";
                                 textProp.setValueAtTime(swEndTime, textDoc);
                             }

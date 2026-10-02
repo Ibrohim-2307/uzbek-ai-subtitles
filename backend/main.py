@@ -550,8 +550,15 @@ async def transcribe_audio(
             clean_text = " ".join([w.word for w in words])
             max_w_cnt = 4 if lines_cnt == 1 else 4
             max_c_len = 28
-            # Agar so'zlar qisqa bo'lsa va 28 belgidan oshmasa, bitta segment qoladi
-            if len(words) <= max_w_cnt and len(clean_text) <= max_c_len:
+
+            # Agar so'zlar orasida sezilarli pauza (>= 0.25s) bo'lsa, ularni alohida segmentga ajratish shart!
+            has_internal_pause = any(
+                (float(getattr(words[k + 1], "start", 0)) - float(getattr(words[k], "end", 0))) >= 0.25
+                for k in range(len(words) - 1)
+            ) if len(words) > 1 else False
+
+            # Agar so'zlar qisqa bo'lsa, 28 belgidan oshmasa va oraliqda pauza bo'lmasa, bitta segment qoladi
+            if len(words) <= max_w_cnt and len(clean_text) <= max_c_len and not has_internal_pause:
                 fmt_text = split_subtitle_text(clean_text, max_chars=24, max_lines=lines_cnt)
                 processed_segments.append(
                     SegmentItem(
@@ -572,7 +579,7 @@ async def transcribe_audio(
                 max_lines=lines_cnt,
                 max_words=4 if lines_cnt == 1 else 7,
                 min_chunk_chars=8 if lines_cnt == 1 else 12,
-                pause_threshold=0.35
+                pause_threshold=0.25
             )
 
             for c in chunks:

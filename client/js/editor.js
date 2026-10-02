@@ -714,7 +714,8 @@ const SubtitleEditor = {
             }
 
             const cleanText = words.map(w => w.word).join(" ");
-            if (words.length <= maxWords && cleanText.length <= maxChars) {
+            const hasInternalPause = words.some((w, idx) => idx > 0 && (w.start - words[idx - 1].end) >= 0.25);
+            if (words.length <= maxWords && cleanText.length <= maxChars && !hasInternalPause) {
                 newSegments.push({
                     id: globalId++,
                     start: words[0].start,
@@ -733,7 +734,11 @@ const SubtitleEditor = {
 
             for (const w of words) {
                 const wLen = (w.word || "").length;
-                if (currChunk.length > 0 && (currChunk.length >= maxWords || currLen + 1 + wLen > maxChars)) {
+                const prevW = currChunk.length > 0 ? currChunk[currChunk.length - 1] : null;
+                const gap = prevW ? (w.start - prevW.end) : 0;
+                const pauseSplit = (gap >= 0.25);
+
+                if (currChunk.length > 0 && (pauseSplit || currChunk.length >= maxWords || currLen + 1 + wLen > maxChars)) {
                     chunks.push(currChunk);
                     currChunk = [w];
                     currLen = wLen;
@@ -791,8 +796,9 @@ const SubtitleEditor = {
             }
 
             const cleanText = words.map(w => w.word).join(" ");
-            // Agar so'zlar 4 tagacha bo'lsa va 28 belgidan oshmasa
-            if (words.length <= maxWords && cleanText.length <= maxChars) {
+            const hasInternalPause = words.some((w, idx) => idx > 0 && (w.start - words[idx - 1].end) >= 0.25);
+            // Agar so'zlar 4 tagacha bo'lsa va 28 belgidan oshmasa hamda oraliqda pauza bo'lmasa
+            if (words.length <= maxWords && cleanText.length <= maxChars && !hasInternalPause) {
                 const fmt = this.formatTwoLines(cleanText, 24);
                 newSegments.push({
                     id: globalId++,
@@ -813,7 +819,11 @@ const SubtitleEditor = {
 
             for (const w of words) {
                 const wLen = (w.word || "").length;
-                if (currChunk.length > 0 && (currChunk.length >= maxWords || currLen + 1 + wLen > maxChars)) {
+                const prevW = currChunk.length > 0 ? currChunk[currChunk.length - 1] : null;
+                const gap = prevW ? (w.start - prevW.end) : 0;
+                const pauseSplit = (gap >= 0.25);
+
+                if (currChunk.length > 0 && (pauseSplit || currChunk.length >= maxWords || currLen + 1 + wLen > maxChars)) {
                     chunks.push(currChunk);
                     currChunk = [w];
                     currLen = wLen;

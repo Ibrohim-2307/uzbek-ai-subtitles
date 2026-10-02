@@ -456,10 +456,10 @@ def snap_word_timestamps_to_audio(
         # So'z hech qachon aniqlangan sukut oralig'iga kirib ketmasin
         for p_start, p_end in pauses:
             # Agar so'z sukut boshlanishidan oldin bo'lsa, lekin u sukut ichiga cho'zilgan bo'lsa
-            if orig_start < p_start and cur_end > p_start:
+            if cur_start < p_start and cur_end > p_start:
                 cur_end = p_start
-            # Agar so'z sukut tugaganidan keyin bo'lishi kerak bo'lsa, lekin start sukut ichida qolgan bo'lsa
-            if orig_start >= p_start and orig_start < p_end:
+            # Agar so'z start vaqti sukut ichida qolgan bo'lsa, uni sukut tugashiga suramiz
+            if cur_start >= p_start and cur_start < p_end:
                 cur_start = p_end
 
         # 4. Minimal davomiylikni kafolatlash

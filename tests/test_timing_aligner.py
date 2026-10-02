@@ -432,6 +432,25 @@ class TestTimingAligner(unittest.TestCase):
         self.assertLess(t_w_start, max_clip_end)
         self.assertEqual(t_w_end, max_clip_end)
 
+    # 41. Qisqa segment ichida pauza bo'lsa, birlashtirib sukutda cho'zib yubormaslik
+    def test_41_internal_pause_chunking_prevents_silent_bleed(self):
+        from backend.utils.uzbek_nlp import chunk_words_by_pause
+        # 2 ta so'z, lekin orasida 1.2s pauza bor ("Men ... keldim")
+        words = [
+            {"word": "Men", "start": 0.2, "end": 0.5},
+            {"word": "keldim", "start": 1.7, "end": 2.1}
+        ]
+        has_internal_pause = any(
+            (float(words[k + 1]["start"]) - float(words[k]["end"])) >= 0.25
+            for k in range(len(words) - 1)
+        )
+        self.assertTrue(has_internal_pause)
+        chunks = chunk_words_by_pause(words, pause_threshold=0.25)
+        self.assertEqual(len(chunks), 2)
+        # 1-so'z 0.5 da tugaydi, 2-so'z esa faqat 1.7 da boshlanadi
+        self.assertEqual(chunks[0][0]["end"], 0.5)
+        self.assertEqual(chunks[1][0]["start"], 1.7)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

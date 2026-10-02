@@ -630,7 +630,8 @@ const HostBridge = {
                                 const nextW = s.words[w + 1] || (timelineSegments[i + 1] && timelineSegments[i + 1].words && timelineSegments[i + 1].words[0]);
                                 const pauseAfter = (typeof wo.pause_after_ms === "number") ? wo.pause_after_ms : (nextW ? (nextW.start - wo.end) * 1000 : 0);
                                 let wEnd = wo.end;
-                                if (!pauseHide && nextW) {
+                                // Faqat agar pauza bo'lmasa (< 200ms) va pauseHide o'chiq bo'lsa, kadrlar miltillamasligi uchun keyingi so'zgacha ulanadi:
+                                if (!pauseHide && nextW && pauseAfter < 200) {
                                     wEnd = nextW.start;
                                 }
                                 if (nextW && wEnd > nextW.start) {
@@ -661,7 +662,12 @@ const HostBridge = {
                                 const nextW = s.words[w + 1];
                                 const aStart = wo.start;
                                 const pauseAfter = (typeof wo.pause_after_ms === "number") ? wo.pause_after_ms : (nextW ? (nextW.start - wo.end) * 1000 : 0);
-                                let aEnd = nextW ? nextW.start : s.end;
+                                let aEnd = wo.end;
+                                if (!pauseHide && nextW && pauseAfter < 250) {
+                                    aEnd = nextW.start;
+                                } else if (!nextW) {
+                                    aEnd = s.end;
+                                }
                                 if (pauseHide && pauseAfter >= pauseThresh) {
                                     aEnd = wo.end;
                                 }
