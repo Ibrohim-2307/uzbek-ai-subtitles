@@ -4,10 +4,18 @@ Adobe After Effects va Premiere Pro panellari bilan localhost orqali muloqot qil
 """
 
 import os
+import sys
 import math
 import zipfile
 import shutil
 import tempfile
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -760,12 +768,16 @@ async def transcribe_audio(
             "first_10_words_trace": first_10_words_trace
         }
 
-        print(f"[Transcribe Diagnostics] Jami {total_words_count} ta so'z ({first_w_time}s -> {last_w_time}s, Sifat: {validation_report['quality']}, Metod: {alignment_method_used}, Offset: {clip_timeline_start_sec}s, Speed: {speed_factor}x)")
-        if first_10_words_trace:
-            print("----- TIMING TRACE (BIRINCHI 10 TA SO'Z) -----")
-            for tr in first_10_words_trace:
-                print(f"WORD: {tr['word']:<14} | raw: {tr['raw']:<6} | aligned: {tr['aligned']:<6} | timeline: {tr['timeline']:<6} | src: {tr['source']}")
-            print("-----------------------------------------------")
+        try:
+            print(f"[Transcribe Diagnostics] Jami {total_words_count} ta so'z ({first_w_time}s -> {last_w_time}s, Sifat: {validation_report['quality']}, Metod: {alignment_method_used}, Offset: {clip_timeline_start_sec}s, Speed: {speed_factor}x)")
+            if first_10_words_trace:
+                print("----- TIMING TRACE (BIRINCHI 10 TA SO'Z) -----")
+                for tr in first_10_words_trace:
+                    clean_w = str(tr['word']).encode("ascii", "replace").decode("ascii")
+                    print(f"WORD: {clean_w:<14} | raw: {tr['raw']:<6} | aligned: {tr['aligned']:<6} | timeline: {tr['timeline']:<6} | src: {tr['source']}")
+                print("-----------------------------------------------")
+        except Exception:
+            pass
 
         return {
             "status": "success",
