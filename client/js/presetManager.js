@@ -142,6 +142,25 @@ const PresetManager = {
                 description: "Ijtimoiy tarmoqlar uchun dinamik so'zma-so'z sariq rangda yonib o'tuvchi zamonaviy subtitr."
             },
             {
+                id: "tiktok_reels_1line",
+                name: "TikTok & Reels (Faqat 1-Qator)",
+                category: "Reels / Shorts (Hormozi & Beast)",
+                fontSize: 48,
+                fontName: "Arial-BoldMT",
+                fillColor: [1.0, 1.0, 1.0],
+                strokeColor: [0.0, 0.0, 0.0],
+                strokeWidth: 4,
+                positionYPercent: 75,
+                maxLines: 1,
+                maxWordsPerLine: 4,
+                isKaraoke: true,
+                highlightColor: [1.0, 0.88, 0.0],
+                animType: "hormozi",
+                templateType: "MOGRT",
+                mogrtPath: "D:/plaginlar/05_MOGRT_va_Titlar (Essential Graphics)/Line by line Hormozi 02.mogrt",
+                description: "Reels va Shorts uchun qat'iy 1 qatorli ixcham so'zma-so'z karaoke subtitr."
+            },
+            {
                 id: "clean_minimalist",
                 name: "Minimalist Oq (Box Title)",
                 category: "Titllar & Lower Thirds",

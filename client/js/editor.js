@@ -690,6 +690,83 @@ const SubtitleEditor = {
     },
 
     /**
+     * Barcha subtitrlarni qat'iy 1 qatorli ixcham formatga keltirish (Shorts/Reels/TikTok).
+     * Hech qachon yangi satr (\n) bo'lmaydi, har bir segmentda ko'pi bilan 3-4 ta so'z (28 belgi).
+     */
+    enforceMaxOneLine(maxWords = 4, maxChars = 28) {
+        if (!this.segments || this.segments.length === 0) return;
+        const newSegments = [];
+        let globalId = 1;
+
+        for (const seg of this.segments) {
+            let words = (seg.words && seg.words.length > 0) ? [...seg.words] : [];
+            if (words.length === 0) {
+                const rawWords = (seg.text || "").replace(/[\r\n]+/g, " ").trim().split(/\s+/).filter(Boolean);
+                if (rawWords.length === 0) continue;
+                const totalDur = Math.max(0.4, seg.end - seg.start);
+                const durPerWord = totalDur / rawWords.length;
+                words = rawWords.map((w, idx) => ({
+                    word: w,
+                    start: Number((seg.start + idx * durPerWord).toFixed(3)),
+                    end: Number((seg.start + (idx + 1) * durPerWord).toFixed(3)),
+                    score: 1.0
+                }));
+            }
+
+            const cleanText = words.map(w => w.word).join(" ");
+            if (words.length <= maxWords && cleanText.length <= maxChars) {
+                newSegments.push({
+                    id: globalId++,
+                    start: words[0].start,
+                    end: words[words.length - 1].end,
+                    text: cleanText,
+                    words: words,
+                    mogrtPath: seg.mogrtPath || "",
+                    styleName: seg.styleName || ""
+                });
+                continue;
+            }
+
+            const chunks = [];
+            let currChunk = [];
+            let currLen = 0;
+
+            for (const w of words) {
+                const wLen = (w.word || "").length;
+                if (currChunk.length > 0 && (currChunk.length >= maxWords || currLen + 1 + wLen > maxChars)) {
+                    chunks.push(currChunk);
+                    currChunk = [w];
+                    currLen = wLen;
+                } else {
+                    currChunk.push(w);
+                    currLen += (currChunk.length > 1 ? 1 : 0) + wLen;
+                }
+            }
+            if (currChunk.length > 0) chunks.push(currChunk);
+
+            for (const c of chunks) {
+                if (!c || c.length === 0) continue;
+                const cText = c.map(w => w.word).join(" ");
+                let cStart = c[0].start;
+                let cEnd = c[c.length - 1].end;
+                if (cEnd <= cStart) cEnd = Number((cStart + 0.35).toFixed(3));
+
+                newSegments.push({
+                    id: globalId++,
+                    start: Number(cStart.toFixed(3)),
+                    end: Number(cEnd.toFixed(3)),
+                    text: cText,
+                    words: c,
+                    mogrtPath: seg.mogrtPath || "",
+                    styleName: seg.styleName || ""
+                });
+            }
+        }
+
+        this.setSegments(newSegments);
+    },
+
+    /**
      * Barcha subtitrlarni qat'iy ko'pi bilan 1 yoki 2 qatorli qilib formatlash
      * Hech qachon 3 yoki 4 qator bo'lib ketmasligini ta'minlaydi
      */

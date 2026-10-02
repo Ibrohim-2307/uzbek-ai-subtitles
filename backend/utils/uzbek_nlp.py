@@ -776,7 +776,9 @@ def split_long_segment(text: str, max_chars: int = 42, max_lines: int = 2) -> Li
 def split_subtitle_text(text: str, max_chars: int = 42, max_lines: int = 2) -> str:
     """Orqaga moslik uchun: qatorlarni \\n bilan ajratilgan bitta matn sifatida qaytaradi"""
     lines = split_into_lines(text, max_chars=max_chars, max_lines=max_lines)
-    return "\n".join(lines)
+    if max_lines == 1:
+        return " ".join(lines) if lines else text
+    return "\n".join(lines[:max_lines])
 
 
 SENTENCE_END_CHARS: Set[str] = {".", "!", "?", "…"}

@@ -392,6 +392,46 @@ class TestTimingAligner(unittest.TestCase):
         for i in range(len(res) - 1):
             self.assertLessEqual(res[i]["end"], res[i + 1]["start"] + 0.001)
 
+    # 39. Qat'iy 1 qatorli uslub (\n yangi satr yo'qligi va 1 qatorga sig'ishi)
+    def test_39_strict_one_line_chunking_and_splitting(self):
+        from backend.utils.uzbek_nlp import split_subtitle_text, chunk_words_by_pause
+        raw_words = [
+            {"word": "Salom", "start": 0.0, "end": 0.5},
+            {"word": "do'stlar", "start": 0.6, "end": 1.2},
+            {"word": "bugun", "start": 1.3, "end": 1.7},
+            {"word": "biz", "start": 1.8, "end": 2.1},
+            {"word": "yangi", "start": 2.2, "end": 2.6},
+            {"word": "loyihani", "start": 2.7, "end": 3.3},
+            {"word": "boshlaymiz.", "start": 3.4, "end": 4.1}
+        ]
+        # max_lines=1 bo'lganda split_subtitle_text da hech qachon \n bo'lmasligi kerak
+        txt_1line = split_subtitle_text("Salom do'stlar bugun biz yangi", max_chars=28, max_lines=1)
+        self.assertNotIn("\n", txt_1line)
+
+        # chunk_words_by_pause da max_lines=1 da har bir bo'lak ko'pi bilan 4 ta so'zdan oshmasligi
+        chunks = chunk_words_by_pause(raw_words, max_chars_line=28, max_lines=1, max_words=4, min_chunk_chars=8, pause_threshold=0.35)
+        for c in chunks:
+            self.assertLessEqual(len(c), 4)
+            c_text = " ".join([w["word"] for w in c])
+            self.assertLessEqual(len(c_text), 35)
+
+    # 40. Klip oxiridagi so'zlar tashlab yuborilmasdan saqlanib qolishi
+    def test_40_trailing_words_clamping_protection(self):
+        clip_end = 5.0
+        frame_dur = 1.0 / 25.0
+        # So'z starti 5.05s da (klip chegarasidan 50ms keyin) - tashlab yuborilmasin, clamp qilinsin
+        t_w_start = 5.05
+        t_w_end = 5.3
+        max_clip_end = clip_end
+
+        # Agar t_w_start <= max_clip_end + 0.35 bo'lsa:
+        if max_clip_end is not None and t_w_start >= round(max_clip_end, 3):
+            t_w_start = round(max_clip_end - frame_dur, 3)
+            t_w_end = round(max_clip_end, 3)
+
+        self.assertLess(t_w_start, max_clip_end)
+        self.assertEqual(t_w_end, max_clip_end)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

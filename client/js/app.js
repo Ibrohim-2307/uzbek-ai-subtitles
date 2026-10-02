@@ -521,6 +521,8 @@ function initTranscribeSection() {
                         clipTimelineSpeed = clipTimelineSpeed / 100.0;
                     }
 
+                    const maxLinesVal = parseInt(document.getElementById("transcribeMaxLinesSelect")?.value, 10) || 2;
+
                     const options = {
                         filePath: c.filePath || null,
                         file: c.file || null,
@@ -541,7 +543,8 @@ function initTranscribeSection() {
                         clipSpeed: clipTimelineSpeed,
                         fps: seqFps,
                         syncOffsetMs: syncOffsetMsVal,
-                        timelineOffsetMs: 0.0
+                        timelineOffsetMs: 0.0,
+                        maxLines: maxLinesVal
                     };
 
                     const result = await window.SubtitleAPI.transcribe(options);
@@ -856,9 +859,12 @@ function initEditorSection() {
                 const wordPauseHold = document.getElementById("checkWordPauseHold") ? document.getElementById("checkWordPauseHold").checked : true;
                 const wordStackMaxLayers = parseInt(document.getElementById("inputWordStackMaxLayers")?.value, 10) || 1200;
 
+                const customMaxLinesVal = parseInt(document.getElementById("customMaxLines")?.value, 10) || 2;
+
                 const activePreset = { 
                     ...window.PresetManager.getActivePreset(), 
                     leadIn: leadIn,
+                    maxLines: customMaxLinesVal,
                     wordByWord: isWordByWord,
                     wordMode: isWordByWord ? wordMode : "off",
                     maxWordsPerLine: maxWords,

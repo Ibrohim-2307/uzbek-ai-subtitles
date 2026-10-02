@@ -1310,7 +1310,7 @@ function ppro_insertMogrtSubtitles(payloadJson) {
                     actualStart = prevEnd;
                 }
             }
-            var actualEnd = Math.max(actualStart + 0.25, sEnd);
+            var actualEnd = Math.max(actualStart + 0.1, sEnd);
             prevEnd = actualEnd;
 
             var timeTicks = String(Math.round(actualStart * 254016000000));
@@ -1790,13 +1790,6 @@ function ae_writeWordStackLayers(comp, wordPlan, style, data) {
 
     var targetLayerOut = compDisplayOffset + comp.duration;
     var targetLayerIn = compDisplayOffset;
-    try {
-        if (comp.selectedLayers && comp.selectedLayers.length > 0) {
-            var selLayer = comp.selectedLayers[0];
-            if (selLayer.outPoint) targetLayerOut = parseFloat(selLayer.outPoint);
-            if (selLayer.inPoint) targetLayerIn = parseFloat(selLayer.inPoint);
-        }
-    } catch (tlErr) {}
 
     // Style parametrlarini olish
     var fontSize = (style && style.fontSize) ? style.fontSize : Math.round(compH * 0.055);
@@ -2066,13 +2059,6 @@ function ae_createSubtitles(payloadJson) {
             var compEnd = compDisplayOffset + comp.duration;
             var targetLayerOut = compEnd;
             var targetLayerIn = compDisplayOffset;
-            try {
-                if (comp.selectedLayers && comp.selectedLayers.length > 0) {
-                    var selLayer = comp.selectedLayers[0];
-                    if (selLayer.outPoint) targetLayerOut = parseFloat(selLayer.outPoint);
-                    if (selLayer.inPoint) targetLayerIn = parseFloat(selLayer.inPoint);
-                }
-            } catch (tlErr) {}
 
             for (var i = 0; i < segments.length; i++) {
                 var seg = segments[i];

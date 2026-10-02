@@ -548,9 +548,11 @@ async def transcribe_audio(
                 ]
 
             clean_text = " ".join([w.word for w in words])
-            # Agar so'zlar 4 tagacha bo'lsa va 26 belgidan oshmasa, bitta segment qoladi
-            if len(words) <= 4 and len(clean_text) <= 28:
-                fmt_text = split_subtitle_text(clean_text, max_chars=24, max_lines=2)
+            max_w_cnt = 4 if lines_cnt == 1 else 4
+            max_c_len = 28
+            # Agar so'zlar qisqa bo'lsa va 28 belgidan oshmasa, bitta segment qoladi
+            if len(words) <= max_w_cnt and len(clean_text) <= max_c_len:
+                fmt_text = split_subtitle_text(clean_text, max_chars=24, max_lines=lines_cnt)
                 processed_segments.append(
                     SegmentItem(
                         id=global_seg_id,
@@ -567,9 +569,9 @@ async def transcribe_audio(
             chunks = chunk_words_by_pause(
                 words,
                 max_chars_line=28,
-                max_lines=2,
-                max_words=7,
-                min_chunk_chars=12,
+                max_lines=lines_cnt,
+                max_words=4 if lines_cnt == 1 else 7,
+                min_chunk_chars=8 if lines_cnt == 1 else 12,
                 pause_threshold=0.35
             )
 
@@ -577,7 +579,7 @@ async def transcribe_audio(
                 if not c:
                     continue
                 c_text = " ".join([w.word for w in c])
-                fmt_c_text = split_subtitle_text(c_text, max_chars=28, max_lines=2)
+                fmt_c_text = split_subtitle_text(c_text, max_chars=28, max_lines=lines_cnt)
                 c_start = c[0].start
                 c_end = c[-1].end
                 if c_end <= c_start:
@@ -649,9 +651,14 @@ async def transcribe_audio(
                 t_w_start = transform_start_time(orig_audio_local_start)
                 t_w_end = transform_end_time(orig_audio_local_end)
 
-                # CLAMPING: Agar so'z boshlanishi klip tugash chegarasidan keyin bo'lsa -> tashlab yuborish
-                if max_clip_end is not None and t_w_start >= round(max_clip_end, 3):
+                # CLAMPING: Agar so'z boshlanishi klip tugash chegarasidan sezilarli keyin bo'lsa -> tashlab yuborish
+                if max_clip_end is not None and t_w_start >= round(max_clip_end + 0.35, 3):
                     continue
+
+                if max_clip_end is not None and t_w_start >= round(max_clip_end, 3):
+                    # Kichik farq bo'lsa (<= 0.35s), oxirgi so'zni yo'qotmaymiz, klip oxiriga tekislaymiz
+                    t_w_start = round(max_clip_end - frame_dur, 3)
+                    t_w_end = round(max_clip_end, 3)
 
                 is_clamped = False
                 if max_clip_end is not None and t_w_end > round(max_clip_end, 3):
@@ -663,7 +670,7 @@ async def transcribe_audio(
 
                 if t_w_end <= t_w_start:
                     t_w_end = round(t_w_start + frame_dur, 3)
-                    if max_clip_end is not None and t_w_end > max_clip_end:
+                    if max_clip_end is not None and t_w_end > max_clip_end + frame_dur:
                         t_w_end = max_clip_end
 
                 if t_w_start >= t_w_end:

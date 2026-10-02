@@ -67,12 +67,11 @@ class GeminiSTTProvider(BaseSTTProvider):
         try:
             duration = get_audio_duration(work_audio)
 
-            # 2. Uzoq audio uchun 90 soniyalik qismlar va nazoratli parallelizm (Semaphore=3)
-            # Bu Google Gemini'ning 429 (Rate Limit) yoki 503 xatolarini to'liq oldini oladi
-            if duration > 75:
-                print(f"[Gemini] Audio ({duration:.1f}s) 90 soniyalik bo'laklarga ajratilib, nazoratli parallel yuborilmoqda...")
+            # 2. Uzoq audio uchun (6 daqiqadan ortiq) xavfsiz bo'laklar va nazoratli parallelizm
+            if duration > 360:
+                print(f"[Gemini] Audio ({duration:.1f}s) 300 soniyalik bo'laklarga ajratilib yuborilmoqda...")
                 chunks_dir = tempfile.mkdtemp(prefix="gemini_chunks_")
-                chunks = split_audio_into_chunks(work_audio, chunk_duration_sec=90, output_dir=chunks_dir)
+                chunks = split_audio_into_chunks(work_audio, chunk_duration_sec=300, output_dir=chunks_dir)
 
                 semaphore = asyncio.Semaphore(3)
 

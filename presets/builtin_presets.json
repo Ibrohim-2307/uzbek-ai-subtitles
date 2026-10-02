@@ -19,6 +19,27 @@
     "description": "Alex Hormozi uslubidagi qatorma-qator sariq va yashil yonuvchi zamonaviy subtitr."
   },
   {
+    "id": "mogrt_hormozi_1line",
+    "name": "Line by line Hormozi (1-Qator)",
+    "category": "Reels / Shorts (Hormozi & Beast)",
+    "fontSize": 48,
+    "fontName": "Arial-BoldMT",
+    "fillColor": [1.0, 1.0, 1.0],
+    "strokeColor": [0.0, 0.0, 0.0],
+    "strokeWidth": 4,
+    "positionYPercent": 75,
+    "maxLines": 1,
+    "maxWordsPerLine": 4,
+    "isKaraoke": true,
+    "highlightColor": [1.0, 0.88, 0.0],
+    "animType": "hormozi",
+    "templateType": "MOGRT",
+    "mogrtPath": "D:/plaginlar/05_MOGRT_va_Titlar (Essential Graphics)/Line by line Hormozi 02.mogrt",
+    "hasThumb": true,
+    "hasVideo": false,
+    "description": "Alex Hormozi uslubidagi qat'iy 1 qatorli ixcham Reels/Shorts subtitri."
+  },
+  {
     "id": "mogrt_beast_01",
     "name": "MrBeast 01 Dinamik",
     "category": "Reels / Shorts (Hormozi & Beast)",

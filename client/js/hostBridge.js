@@ -468,16 +468,24 @@ const HostBridge = {
                     }));
                 }
 
+                const effMaxLines = (styleOptions && (styleOptions.maxLines === 1 || styleOptions.wordMaxLines === 1)) ? 1 : 2;
+
                 function fmt2Lines(txt) {
                     const words = (txt || "").replace(/[\r\n]+/g, " ").trim().split(/\s+/).filter(Boolean);
-                    if (words.length <= 1) return words.join(" ");
+                    if (effMaxLines === 1 || words.length <= 1) return words.join(" ");
                     if (words.length <= 3 && txt.length <= 24) return words.join(" ");
                     const half = Math.floor(words.length / 2);
                     return words.slice(0, half).join(" ") + "\n" + words.slice(half).join(" ");
                 }
 
                 if (window.UzbekUtils && window.UzbekUtils.chunkWordsSmart) {
-                    const chunks = window.UzbekUtils.chunkWordsSmart(ws, { maxCharsLine: 28, maxLines: 2, maxWords: 7, minChunkChars: 12, pauseThreshold: 0.35 });
+                    const chunks = window.UzbekUtils.chunkWordsSmart(ws, {
+                        maxCharsLine: 28,
+                        maxLines: effMaxLines,
+                        maxWords: effMaxLines === 1 ? 4 : 7,
+                        minChunkChars: effMaxLines === 1 ? 8 : 12,
+                        pauseThreshold: 0.35
+                    });
                     for (let c = 0; c < chunks.length; c++) {
                         const ch = chunks[c];
                         const cTxt = ch.map(item => item.word).join(" ");
@@ -499,12 +507,14 @@ const HostBridge = {
                 const chunks = [];
                 let cChunk = [];
                 let cLen = 0;
+                const maxChunkWords = effMaxLines === 1 ? 4 : 7;
+                const maxChunkLen = effMaxLines === 1 ? 28 : 56;
                 for (let w = 0; w < ws.length; w++) {
                     const wItem = ws[w];
                     const wLen = (wItem.word || "").length;
                     const prevW = cChunk.length > 0 ? cChunk[cChunk.length - 1] : null;
                     const pause = (prevW && wItem.start && prevW.end) ? (wItem.start - prevW.end) : 0;
-                    if (cChunk.length > 0 && (cChunk.length >= 7 || cLen + 1 + wLen > 56 || pause >= 0.35)) {
+                    if (cChunk.length > 0 && (cChunk.length >= maxChunkWords || cLen + 1 + wLen > maxChunkLen || pause >= 0.35)) {
                         chunks.push(cChunk);
                         cChunk = [wItem];
                         cLen = wLen;
@@ -534,11 +544,12 @@ const HostBridge = {
             return res;
         }
 
+        const effMaxLines = (styleOptions && (styleOptions.maxLines === 1 || styleOptions.wordMaxLines === 1)) ? 1 : 2;
         if (window.UzbekUtils && window.UzbekUtils.rechunkSegments) {
             timelineSegments = window.UzbekUtils.rechunkSegments(timelineSegments, {
                 fps: currentFps,
                 maxChars: 28,
-                maxLines: 2,
+                maxLines: effMaxLines,
                 normalize: true
             });
         } else {
