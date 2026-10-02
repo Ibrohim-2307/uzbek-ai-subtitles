@@ -169,41 +169,57 @@ def phonetic_similarity(w1: str, w2: str) -> float:
     return round(sim, 3)
 
 
+_CUDA_FUNCTIONAL: Optional[bool] = None
+
+def is_cuda_working() -> bool:
+    """CTranslate2 va CUDA (cublas64_12.dll) haqiqatda xatosiz ishlashini tekshiradi"""
+    global _CUDA_FUNCTIONAL
+    if _CUDA_FUNCTIONAL is not None:
+        return _CUDA_FUNCTIONAL
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() <= 0:
+            _CUDA_FUNCTIONAL = False
+            return False
+        # cublas kutubxonasi mavjudligini tezkor tekshirish
+        test_m = WhisperModel("tiny", device="cuda", compute_type="float16")
+        dummy_audio = np.zeros(16000, dtype=np.float32)
+        list(test_m.transcribe(dummy_audio, beam_size=1, word_timestamps=False)[0])
+        _CUDA_FUNCTIONAL = True
+        return True
+    except Exception:
+        _CUDA_FUNCTIONAL = False
+        return False
+
+
 def get_cached_whisper_model(model_size: str = "tiny") -> Optional[Any]:
-    """Faster-whisper modelini keshlaydi (Nvidia GPU/CUDA mavjud bo'lsa float16, aks holda CPU int8)"""
+    """Faster-whisper modelini keshlaydi (CUDA to'liq ishlasa GPU, aks holda xatosiz CPU int8)"""
     global _CACHED_WHISPER_MODEL, _CACHED_MODEL_SIZE
     if not FASTER_WHISPER_AVAILABLE:
         return None
 
     if _CACHED_WHISPER_MODEL is None or _CACHED_MODEL_SIZE != model_size:
         try:
-            device = "cpu"
-            compute_type = "int8"
+            device = "cuda" if is_cuda_working() else "cpu"
+            compute_type = "float16" if device == "cuda" else "int8"
+            _CACHED_WHISPER_MODEL = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type
+            )
+            _CACHED_MODEL_SIZE = model_size
+        except Exception as e:
+            print(f"[Timing Aligner] WhisperModel yuklashda xatolik: {e}. CPU ga o'tilmoqda...")
             try:
-                import ctranslate2
-                if ctranslate2.get_cuda_device_count() > 0:
-                    device = "cuda"
-                    compute_type = "float16"
-            except Exception:
-                pass
-
-            try:
-                _CACHED_WHISPER_MODEL = WhisperModel(
-                    model_size,
-                    device=device,
-                    compute_type=compute_type
-                )
-            except Exception:
-                # Agar CUDA drayver xatosi bersa, CPU ga fallback
                 _CACHED_WHISPER_MODEL = WhisperModel(
                     model_size,
                     device="cpu",
                     compute_type="int8"
                 )
-            _CACHED_MODEL_SIZE = model_size
-        except Exception as e:
-            print(f"[Timing Aligner] WhisperModel yuklashda xatolik: {e}")
-            return None
+                _CACHED_MODEL_SIZE = model_size
+            except Exception as e2:
+                print(f"[Timing Aligner] CPU yuklashda ham xatolik: {e2}")
+                return None
 
     return _CACHED_WHISPER_MODEL
 
@@ -227,32 +243,49 @@ def transcribe_words_local(
     if model is None:
         return []
 
-    segments_generator, info = model.transcribe(
-        wav_path,
-        language=language if language != "auto" else None,
-        task="transcribe",
-        word_timestamps=True,
-        condition_on_previous_text=False,
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=200, speech_pad_ms=80),
-        beam_size=1,
-        temperature=0.0
-    )
+    def _extract_words(segs) -> List[Dict[str, Any]]:
+        words = []
+        for seg in segs:
+            if hasattr(seg, "words") and seg.words:
+                for w in seg.words:
+                    clean_w = w.word.strip()
+                    if clean_w:
+                        words.append({
+                            "word": clean_w,
+                            "start": round(float(w.start), 3),
+                            "end": round(float(w.end), 3),
+                            "confidence": round(float(getattr(w, "probability", 1.0)), 3)
+                        })
+        return words
 
-    measured_words = []
-    for seg in segments_generator:
-        if hasattr(seg, "words") and seg.words:
-            for w in seg.words:
-                clean_w = w.word.strip()
-                if clean_w:
-                    measured_words.append({
-                        "word": clean_w,
-                        "start": round(float(w.start), 3),
-                        "end": round(float(w.end), 3),
-                        "confidence": round(float(getattr(w, "probability", 1.0)), 3)
-                    })
-
-    return measured_words
+    try:
+        segments_generator, info = model.transcribe(
+            wav_path,
+            language=language if language != "auto" else None,
+            task="transcribe",
+            word_timestamps=True,
+            condition_on_previous_text=False,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=200, speech_pad_ms=80),
+            beam_size=1,
+            temperature=0.0
+        )
+        return _extract_words(segments_generator)
+    except Exception as trans_err:
+        print(f"[Timing Aligner] Transkripsiya xatosi ({trans_err}). CPU orqali qayta urinilmoqda...")
+        cpu_model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        segments_generator, info = cpu_model.transcribe(
+            wav_path,
+            language=language if language != "auto" else None,
+            task="transcribe",
+            word_timestamps=True,
+            condition_on_previous_text=False,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=200, speech_pad_ms=80),
+            beam_size=1,
+            temperature=0.0
+        )
+        return _extract_words(segments_generator)
 
 
 def align_words_to_timed_words(

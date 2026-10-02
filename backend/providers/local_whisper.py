@@ -36,17 +36,10 @@ class LocalWhisperProvider(BaseSTTProvider):
         if device == "auto":
             is_cuda = False
             try:
-                import ctranslate2
-                is_cuda = (ctranslate2.get_cuda_device_count() > 0)
+                from ..utils.timing_aligner import is_cuda_working
+                is_cuda = is_cuda_working()
             except Exception:
                 pass
-
-            if not is_cuda:
-                try:
-                    import torch
-                    is_cuda = torch.cuda.is_available()
-                except Exception:
-                    pass
 
             if is_cuda:
                 device = "cuda"

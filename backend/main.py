@@ -89,20 +89,12 @@ def health_check():
     has_gpu = False
     gpu_name = "CPU"
     try:
-        import ctranslate2
-        if ctranslate2.get_cuda_device_count() > 0:
+        from .utils.timing_aligner import is_cuda_working
+        if is_cuda_working():
             has_gpu = True
             gpu_name = "NVIDIA GPU (CUDA)"
     except Exception:
         pass
-    if not has_gpu:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                has_gpu = True
-                gpu_name = torch.cuda.get_device_name(0)
-        except Exception:
-            pass
 
     timing_engine_info = "provider_estimate"
     try:
@@ -669,13 +661,30 @@ async def transcribe_audio(
                 if t_w_start >= t_w_end:
                     continue
 
-                w_raw_s = getattr(w, "raw_start", orig_audio_local_start)
-                w_raw_e = getattr(w, "raw_end", orig_audio_local_end)
-                w_orig_s = getattr(w, "original_start", orig_audio_local_start)
-                w_al_s = getattr(w, "aligned_start", orig_audio_local_start)
-                w_src = getattr(w, "timing_source", "whisper")
-                w_conf = getattr(w, "timing_confidence", 1.0)
-                w_snap_shift = getattr(w, "snap_shift_ms", 0.0)
+                w_raw_s = getattr(w, "raw_start", None)
+                if w_raw_s is None:
+                    w_raw_s = orig_audio_local_start
+
+                w_raw_e = getattr(w, "raw_end", None)
+                if w_raw_e is None:
+                    w_raw_e = orig_audio_local_end
+
+                w_orig_s = getattr(w, "original_start", None)
+                if w_orig_s is None:
+                    w_orig_s = orig_audio_local_start
+
+                w_al_s = getattr(w, "aligned_start", None)
+                if w_al_s is None:
+                    w_al_s = orig_audio_local_start
+
+                w_src = getattr(w, "timing_source", None) or "whisper"
+                w_conf = getattr(w, "timing_confidence", None)
+                if w_conf is None:
+                    w_conf = 1.0
+
+                w_snap_shift = getattr(w, "snap_shift_ms", None)
+                if w_snap_shift is None:
+                    w_snap_shift = 0.0
 
                 w.start = t_w_start
                 w.end = t_w_end

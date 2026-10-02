@@ -103,7 +103,59 @@ async function initHostUI() {
     }
 }
 
-// ==================== BACKEND HOLATI ====================
+// ==================== BACKEND HOLATI VA AVTO-TIKLASH ====================
+
+let _autoStartingBackend = false;
+function triggerBackendStart() {
+    if (_autoStartingBackend) return;
+    if (typeof require !== "undefined") {
+        try {
+            _autoStartingBackend = true;
+            const cp = require('child_process');
+            const path = require('path');
+            const fs = require('fs');
+
+            const statusText = document.getElementById("backendStatusText");
+            if (statusText) statusText.textContent = "Backend ishga tushirilmoqda...";
+
+            const candidateRoots = [
+                path.resolve(__dirname || "", ".."),
+                "D:/anti garavity loyhalar/plogin",
+                "C:/Users/baxru/AppData/Roaming/Adobe/CEP/extensions/com.uzbek.subtitles"
+            ];
+            let foundBat = null;
+            let projectRoot = null;
+            for (const r of candidateRoots) {
+                const b = path.join(r, "scripts", "start_backend.bat");
+                if (fs.existsSync(b)) {
+                    foundBat = b;
+                    projectRoot = r;
+                    break;
+                }
+            }
+
+            if (foundBat) {
+                console.log("[AutoStart] start_backend.bat ishga tushirilmoqda:", foundBat);
+                cp.spawn("cmd.exe", ["/c", "start", '""', foundBat], {
+                    cwd: projectRoot,
+                    detached: true,
+                    stdio: 'ignore'
+                }).unref();
+
+                setTimeout(async () => {
+                    await checkBackendStatus();
+                    _autoStartingBackend = false;
+                }, 4000);
+            } else {
+                _autoStartingBackend = false;
+            }
+        } catch (e) {
+            console.warn("[AutoStart] Xatolik:", e);
+            _autoStartingBackend = false;
+        }
+    }
+}
+window.triggerBackendStart = triggerBackendStart;
 
 async function checkBackendStatus() {
     const statusDot = document.getElementById("backendStatusDot");
@@ -116,10 +168,17 @@ async function checkBackendStatus() {
             const gpuText = res.gpu_available ? `GPU: ${res.device_name}` : "CPU";
             statusText.textContent = `Backend faol (${gpuText})`;
             statusText.title = `Model: ${res.model_size}, Provayder: ${res.active_provider}`;
+            statusText.style.cursor = "default";
+            statusText.onclick = null;
         }
     } else {
         if (statusDot) statusDot.className = "status-dot offline";
-        if (statusText) statusText.textContent = "Backend ulanmagan (start_backend.bat ni ishga tushiring)";
+        if (statusText) {
+            statusText.textContent = "Backend ulanmagan (Bosing yoki start_backend.bat ni yoqing)";
+            statusText.style.cursor = "pointer";
+            statusText.title = "Serverni ishga tushirish uchun bosing";
+            statusText.onclick = () => triggerBackendStart();
+        }
     }
 }
 
@@ -394,6 +453,16 @@ function initTranscribeSection() {
             btnStartTranscribe.disabled = true;
             if (progressContainer) progressContainer.style.display = "block";
             if (progressStatus) progressStatus.textContent = "Audio tayyorlanmoqda va AI modelga yuborilmoqda...";
+
+            // Backend offline bo'lsa, avtomatik ishga tushirishga urinish
+            try {
+                const initialHealth = await window.SubtitleAPI.checkHealth();
+                if (!initialHealth.online) {
+                    if (progressStatus) progressStatus.textContent = "Backend server ishga tushirilmoqda (1-2 soniya)...";
+                    triggerBackendStart();
+                    await new Promise(r => setTimeout(r, 3500));
+                }
+            } catch (hErr) {}
 
             // Yangi video transkripsiyasi boshlanganda, eski subtitrlar chalkashtirmasligi uchun tozalash
             if (window.SubtitleEditor) {
