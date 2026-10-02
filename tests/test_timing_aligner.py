@@ -343,6 +343,55 @@ class TestTimingAligner(unittest.TestCase):
         # Model yuklanishi yoki mavjud bo'lmasa None qaytarishi kerak, xato tashlamasligi shart
         self.assertTrue(model is not None or not hasattr(sys.modules.get("faster_whisper"), "WhisperModel"))
 
+    # 36. Oxirgi so'zlar mos kelmaganda vaqt bo'yicha proporsional tarqalishi (80ms ga tiqilib qolmaslik)
+    def test_36_unmatched_trailing_words_proportional_spread(self):
+        p = [
+            {"word": "boshlanish", "start": 1.0, "end": 1.5},
+            {"word": "birinchi", "start": 3.0, "end": 3.5},
+            {"word": "ikkinchi", "start": 5.0, "end": 5.5},
+            {"word": "uchinchi", "start": 7.0, "end": 7.5}
+        ]
+        t = [
+            {"word": "boshlanish", "start": 1.0, "end": 1.4}
+        ]
+        res = align_words_to_timed_words(p, t)
+        self.assertEqual(len(res), 4)
+        # So'zlar bir joyga tiqilib qolmasdan o'zaro vaqt bo'yicha siljigan bo'lishi kerak
+        self.assertGreater(res[1]["start"], res[0]["end"])
+        self.assertGreater(res[2]["start"], res[1]["start"] + 1.0)
+        self.assertGreater(res[3]["start"], res[2]["start"] + 1.0)
+
+    # 37. Sakoe-Chiba vaqt yo'lagi uzoqdagi bir xil so'zlar bilan noto'g'ri moslashishni to'xtatishi
+    def test_37_sakoe_chiba_time_band_prevents_distant_misalignment(self):
+        p = [
+            {"word": "ha", "start": 1.0, "end": 1.3},
+            {"word": "kitob", "start": 2.0, "end": 2.5}
+        ]
+        t = [
+            # 60 soniyadan keyingi "ha" so'zi
+            {"word": "ha", "start": 60.0, "end": 60.3},
+            {"word": "kitob", "start": 2.0, "end": 2.4}
+        ]
+        res = align_words_to_timed_words(p, t)
+        # 1-soniyadagi "ha" 60-soniyadagi "ha" ga tortilib ketmasligi kerak
+        self.assertLess(res[0]["start"], 10.0)
+
+    # 38. Barcha so'zlar uchun qat'iy non-overlap va monotonlik
+    def test_38_non_overlapping_word_and_segment_cues(self):
+        p = [
+            {"word": "a", "start": 1.0, "end": 1.5},
+            {"word": "b", "start": 1.4, "end": 1.8},
+            {"word": "c", "start": 1.7, "end": 2.1}
+        ]
+        t = [
+            {"word": "a", "start": 1.0, "end": 1.4},
+            {"word": "b", "start": 1.3, "end": 1.7},
+            {"word": "c", "start": 1.6, "end": 2.0}
+        ]
+        res = align_words_to_timed_words(p, t)
+        for i in range(len(res) - 1):
+            self.assertLessEqual(res[i]["end"], res[i + 1]["start"] + 0.001)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -496,10 +496,14 @@ def snap_word_timestamps_to_audio(
     for i in range(len(refined_words)):
         # Oldingi so'z bilan to'qnashuv
         if i > 0:
-            prev_end = refined_words[i - 1]["end"]
-            if refined_words[i]["start"] < prev_end:
-                refined_words[i]["start"] = prev_end
-                refined_words[i]["aligned_start"] = prev_end
+            if refined_words[i]["start"] < refined_words[i - 1]["end"]:
+                # Avval oldingi so'zning tugashini qisqartiramiz (keyingi so'z boshlanishi kechikmasligi uchun)
+                refined_words[i - 1]["end"] = refined_words[i]["start"]
+                if refined_words[i - 1]["end"] - refined_words[i - 1]["start"] < min_dur_sec:
+                    refined_words[i - 1]["end"] = round(refined_words[i - 1]["start"] + min_dur_sec, 3)
+                    if refined_words[i]["start"] < refined_words[i - 1]["end"]:
+                        refined_words[i]["start"] = refined_words[i - 1]["end"]
+                        refined_words[i]["aligned_start"] = refined_words[i - 1]["end"]
             if refined_words[i]["end"] <= refined_words[i]["start"]:
                 refined_words[i]["end"] = round(refined_words[i]["start"] + min_dur_sec, 3)
 

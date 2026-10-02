@@ -348,10 +348,19 @@ def align_words_to_timed_words(
 
     for i in range(1, N + 1):
         pw = p_items[i - 1]["word"]
+        p_time = float(p_items[i - 1]["start"])
         for j in range(1, M + 1):
             tw = t_items[j - 1]["word"]
-            sim = phonetic_similarity(pw, tw)
-            match_score = sim if sim >= min_similarity else -0.5
+            t_time = float(t_items[j - 1]["start"])
+            time_diff = abs(p_time - t_time)
+
+            # Sakoe-Chiba vaqt yo'lagi: 15 soniyadan uzoqdagi so'zlar moslashtirilmaydi
+            if time_diff > 15.0:
+                match_score = -999.0
+            else:
+                time_penalty = min(0.3, time_diff * 0.05)
+                sim = phonetic_similarity(pw, tw)
+                match_score = (sim - time_penalty) if sim >= min_similarity else -0.5
 
             score_diag = dp[i - 1][j - 1] + match_score
             score_up = dp[i - 1][j] + GAP_PENALTY
@@ -392,8 +401,8 @@ def align_words_to_timed_words(
         orig_w = p_items[i]
         item = {
             "word": orig_w["word"],
-            "start": orig_w["start"],
-            "end": orig_w["end"],
+            "start": float(orig_w["start"]),
+            "end": float(orig_w["end"]),
             "confidence": orig_w.get("confidence", 1.0),
             "pause_after_ms": orig_w.get("pause_after_ms", 0.0),
             "measured": False
@@ -401,17 +410,16 @@ def align_words_to_timed_words(
 
         if i in matched_pairs:
             t_match = t_items[matched_pairs[i]]
-            item["start"] = t_match["start"]
-            item["end"] = t_match["end"]
-            item["confidence"] = max(item["confidence"], t_match.get("confidence", 0.9))
+            item["start"] = float(t_match["start"])
+            item["end"] = float(t_match["end"])
+            item["confidence"] = max(item["confidence"], float(t_match.get("confidence", 0.9)))
             item["measured"] = True
 
         result.append(item)
 
-    # Mos kelmagan so'zlarni interpolyatsiya orqali to'g'rilash
+    # Mos kelmagan so'zlarni vaqtga proporsional (affine) interpolyatsiya qilish
     for i in range(N):
         if not result[i]["measured"]:
-            # Oldingi va keyingi mos kelgan so'zlarni topamiz
             prev_m = None
             next_m = None
             for p in range(i - 1, -1, -1):
@@ -423,42 +431,59 @@ def align_words_to_timed_words(
                     next_m = nx
                     break
 
+            orig_w = p_items[i]
+            orig_s = float(orig_w["start"])
+            orig_e = float(orig_w["end"])
+            orig_dur = max(0.08, orig_e - orig_s)
+
             if prev_m is not None and next_m is not None:
-                # Ikkita ma'lum nuqta o'rtasida proporsional taqsimlash
-                span_start = result[prev_m]["end"]
-                span_end = result[next_m]["start"]
-                num_unmatched = next_m - prev_m - 1
-                unmatched_idx = i - prev_m - 1
-                if span_end > span_start and num_unmatched > 0:
-                    step = (span_end - span_start) / float(num_unmatched + 1)
-                    calc_s = round(span_start + unmatched_idx * step, 3)
-                    calc_e = round(calc_s + step * 0.8, 3)
+                orig_prev_e = float(p_items[prev_m]["end"])
+                orig_next_s = float(p_items[next_m]["start"])
+                meas_prev_e = float(result[prev_m]["end"])
+                meas_next_s = float(result[next_m]["start"])
+                orig_span = orig_next_s - orig_prev_e
+                meas_span = meas_next_s - meas_prev_e
+                if orig_span > 0.001 and meas_span > 0.001:
+                    ratio = meas_span / orig_span
+                    calc_s = round(meas_prev_e + (orig_s - orig_prev_e) * ratio, 3)
+                    calc_dur = max(0.08, orig_dur * ratio)
                     result[i]["start"] = calc_s
-                    result[i]["end"] = max(calc_e, calc_s + 0.08)
+                    result[i]["end"] = round(calc_s + calc_dur, 3)
+                else:
+                    num_unmatched = next_m - prev_m - 1
+                    unmatched_idx = i - prev_m - 1
+                    step = max(0.08, meas_span / float(num_unmatched + 1)) if meas_span > 0 else 0.08
+                    calc_s = round(meas_prev_e + unmatched_idx * step, 3)
+                    result[i]["start"] = calc_s
+                    result[i]["end"] = round(calc_s + step * 0.8, 3)
             elif prev_m is not None:
-                # Faqat oldingi nuqta bor
-                orig_dur = max(0.08, result[i]["end"] - result[i]["start"])
-                calc_s = round(result[prev_m]["end"] + 0.04, 3)
+                orig_prev_e = float(p_items[prev_m]["end"])
+                meas_prev_e = float(result[prev_m]["end"])
+                delta_s = max(0.04, orig_s - orig_prev_e)
+                calc_s = round(meas_prev_e + delta_s, 3)
                 result[i]["start"] = calc_s
                 result[i]["end"] = round(calc_s + orig_dur, 3)
             elif next_m is not None:
-                # Faqat keyingi nuqta bor
-                orig_dur = max(0.08, result[i]["end"] - result[i]["start"])
-                calc_e = round(result[next_m]["start"] - 0.04, 3)
-                calc_s = max(0.0, round(calc_e - orig_dur, 3))
+                orig_next_s = float(p_items[next_m]["start"])
+                meas_next_s = float(result[next_m]["start"])
+                delta_s = max(0.04, orig_next_s - orig_s)
+                calc_s = max(0.0, round(meas_next_s - delta_s, 3))
                 result[i]["start"] = calc_s
                 result[i]["end"] = round(calc_s + orig_dur, 3)
 
-    # Qat'iy monotonlik va minimal davomiylikni tekshirish hamda kanonik metama'lumotlarni o'rnatish
+    # Qat'iy monotonlik, no-overlap va minimal davomiylikni kafolatlash
     for i in range(N):
         orig_s = float(p_items[i]["start"])
         orig_e = float(p_items[i]["end"])
         if result[i]["end"] - result[i]["start"] < 0.08:
             result[i]["end"] = round(result[i]["start"] + 0.08, 3)
-        if i > 0 and result[i]["start"] < result[i - 1]["start"]:
-            result[i]["start"] = result[i - 1]["start"]
-            if result[i]["end"] - result[i]["start"] < 0.08:
-                result[i]["end"] = round(result[i]["start"] + 0.08, 3)
+        if i > 0:
+            if result[i]["start"] < result[i - 1]["start"]:
+                result[i]["start"] = result[i - 1]["start"]
+            if result[i - 1]["end"] > result[i]["start"]:
+                result[i - 1]["end"] = result[i]["start"]
+        if result[i]["end"] - result[i]["start"] < 0.08:
+            result[i]["end"] = round(result[i]["start"] + 0.08, 3)
 
         result[i]["raw_start"] = orig_s
         result[i]["raw_end"] = orig_e

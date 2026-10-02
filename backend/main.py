@@ -721,10 +721,25 @@ async def transcribe_audio(
             if not final_words:
                 continue
 
+            # Segment ichidagi so'zlar orasida to'qnashuv bo'lmasligi (no-overlap)
+            for kw in range(len(final_words) - 1):
+                if final_words[kw].end > final_words[kw + 1].start:
+                    final_words[kw].end = final_words[kw + 1].start
+                if final_words[kw].end <= final_words[kw].start:
+                    final_words[kw].end = round(final_words[kw].start + frame_dur, 3)
+
             s.words = final_words
             s.start = final_words[0].start
             s.end = final_words[-1].end
             final_segments.append(s)
+
+        # Segmentlar orasida ham to'qnashuv bo'lmasligi (no-overlap)
+        for ks in range(len(final_segments) - 1):
+            if final_segments[ks].end > final_segments[ks + 1].start:
+                final_segments[ks].end = final_segments[ks + 1].start
+            if final_segments[ks].words and final_segments[ks + 1].words:
+                if final_segments[ks].words[-1].end > final_segments[ks + 1].words[0].start:
+                    final_segments[ks].words[-1].end = final_segments[ks + 1].words[0].start
 
         processed_segments = final_segments
 
@@ -851,93 +866,127 @@ def export_srt(payload: ExportRequest):
     w_mode = payload.word_mode
     thresh = payload.pause_hide_threshold_ms or 800
 
-    for seg in payload.segments:
-        words = seg.get("words") or []
-        seg_start = float(seg.get("start", 0))
-        seg_end = float(seg.get("end", 0))
-        text = normalize_uzbek_text(seg.get("text", "")).strip()
+    if w_mode in ("single", "stack", "cascade"):
+        flat_words = []
+        for seg in payload.segments:
+            words = seg.get("words") or []
+            seg_start = float(seg.get("start", 0))
+            if words:
+                for w in words:
+                    flat_words.append(w)
+            elif seg.get("text"):
+                flat_words.append({
+                    "word": str(seg.get("text", "")).strip(),
+                    "start": seg_start,
+                    "end": float(seg.get("end", seg_start + 0.3)),
+                    "pause_after_ms": 0.0
+                })
 
-        # Agar so'zma-so'z rejim yoqilgan bo'lsa va so'zlar mavjud bo'lsa:
-        if w_mode == "accumulate" and words:
-            # To'planib borsin: Har bir yangi so'z aytilganda qatorga qo'shiladi
-            for w_idx in range(len(words)):
-                c_start = float(words[w_idx].get("start", seg_start))
-                w_end = float(words[w_idx].get("end", c_start + 0.3))
-                pause_after = float(words[w_idx].get("pause_after_ms", 0.0))
+        for w_idx, w_item in enumerate(flat_words):
+            c_start = float(w_item.get("start", 0))
+            w_end = float(w_item.get("end", c_start + 0.3))
+            pause_after = float(w_item.get("pause_after_ms", 0.0))
+            next_w = flat_words[w_idx + 1] if (w_idx + 1 < len(flat_words)) else None
+            next_start = float(next_w.get("start")) if next_w else None
 
-                # Pauzada matnni yashirish sozlamasi:
+            if w_mode in ("stack", "cascade") and next_start is not None:
                 if payload.pause_hide_text and pause_after >= thresh:
                     c_end = w_end
                 else:
-                    c_end = float(words[w_idx + 1].get("start")) if (w_idx + 1 < len(words)) else seg_end
-
-                if c_end <= c_start:
-                    c_end = c_start + 0.3
-
-                accum_text = normalize_uzbek_text(" ".join([str(words[k].get("word", "")) for k in range(w_idx + 1)]))
-                lines.append(f"{cue_id}")
-                lines.append(f"{seconds_to_srt_time(c_start)} --> {seconds_to_srt_time(c_end)}")
-                lines.append(accum_text)
-                lines.append("")
-                cue_id += 1
-
-        elif w_mode in ("single", "stack", "cascade") and words:
-            # Bitta so'z yoki Kaskad: so'z keyingi so'z kelguncha (yoki pauzada) ko'rinadi
-            for w_idx, w_item in enumerate(words):
-                c_start = float(w_item.get("start", seg_start))
-                w_end = float(w_item.get("end", c_start + 0.3))
-                pause_after = float(w_item.get("pause_after_ms", 0.0))
-                if w_mode in ("stack", "cascade") and (w_idx + 1 < len(words)):
-                    next_start = float(words[w_idx + 1].get("start", w_end))
+                    c_end = next_start
+            elif w_mode == "single":
+                if next_start is not None:
                     if payload.pause_hide_text and pause_after >= thresh:
-                        c_end = w_end
+                        c_end = min(w_end, next_start)
                     else:
                         c_end = next_start
                 else:
                     c_end = w_end
-                if c_end <= c_start:
-                    c_end = c_start + 0.25
-                w_text = normalize_uzbek_text(str(w_item.get("word", ""))).strip()
-                if not w_text:
-                    continue
-                lines.append(f"{cue_id}")
-                lines.append(f"{seconds_to_srt_time(c_start)} --> {seconds_to_srt_time(c_end)}")
-                lines.append(w_text)
-                lines.append("")
-                cue_id += 1
+            else:
+                c_end = w_end
 
-        elif w_mode == "karaoke" and words:
-            # Ajratib bo'yash (karaoke): butun qator ko'rinadi, faol so'z rangi o'zgaradi
-            h_color = payload.highlight_color or "#ffe600"
-            for w_idx in range(len(words)):
-                c_start = float(words[w_idx].get("start", seg_start))
-                c_end = float(words[w_idx + 1].get("start")) if (w_idx + 1 < len(words)) else seg_end
-                if c_end <= c_start:
-                    c_end = c_start + 0.3
+            # Qat'iy no-overlap: hech qachon keyingi so'z startidan oshmasin
+            if next_start is not None and c_end > next_start:
+                c_end = next_start
+            if c_end <= c_start:
+                c_end = round(c_start + 0.08, 3)
 
-                k_parts = []
-                for k in range(len(words)):
-                    kw = normalize_uzbek_text(str(words[k].get("word", "")))
-                    if k == w_idx:
-                        k_parts.append(f'<font color="{h_color}">{kw}</font>')
-                    else:
-                        k_parts.append(kw)
-
-                lines.append(f"{cue_id}")
-                lines.append(f"{seconds_to_srt_time(c_start)} --> {seconds_to_srt_time(c_end)}")
-                lines.append(" ".join(k_parts))
-                lines.append("")
-                cue_id += 1
-
-        else:
-            # Standart rejim (jumla bo'yicha)
-            start_str = seconds_to_srt_time(seg_start)
-            end_str = seconds_to_srt_time(seg_end)
+            w_text = normalize_uzbek_text(str(w_item.get("word", ""))).strip()
+            if not w_text:
+                continue
             lines.append(f"{cue_id}")
-            lines.append(f"{start_str} --> {end_str}")
-            lines.append(text)
+            lines.append(f"{seconds_to_srt_time(c_start)} --> {seconds_to_srt_time(c_end)}")
+            lines.append(w_text)
             lines.append("")
             cue_id += 1
+
+    else:
+        for seg_idx, seg in enumerate(payload.segments):
+            words = seg.get("words") or []
+            seg_start = float(seg.get("start", 0))
+            seg_end = float(seg.get("end", 0))
+            text = normalize_uzbek_text(seg.get("text", "")).strip()
+
+            if w_mode == "accumulate" and words:
+                for w_idx in range(len(words)):
+                    c_start = float(words[w_idx].get("start", seg_start))
+                    w_end = float(words[w_idx].get("end", c_start + 0.3))
+                    pause_after = float(words[w_idx].get("pause_after_ms", 0.0))
+
+                    if payload.pause_hide_text and pause_after >= thresh:
+                        c_end = w_end
+                    else:
+                        c_end = float(words[w_idx + 1].get("start")) if (w_idx + 1 < len(words)) else seg_end
+
+                    if c_end <= c_start:
+                        c_end = c_start + 0.3
+
+                    accum_text = normalize_uzbek_text(" ".join([str(words[k].get("word", "")) for k in range(w_idx + 1)]))
+                    lines.append(f"{cue_id}")
+                    lines.append(f"{seconds_to_srt_time(c_start)} --> {seconds_to_srt_time(c_end)}")
+                    lines.append(accum_text)
+                    lines.append("")
+                    cue_id += 1
+
+            elif w_mode == "karaoke" and words:
+                h_color = payload.highlight_color or "#ffe600"
+                for w_idx in range(len(words)):
+                    c_start = float(words[w_idx].get("start", seg_start))
+                    c_end = float(words[w_idx + 1].get("start")) if (w_idx + 1 < len(words)) else seg_end
+                    if c_end <= c_start:
+                        c_end = c_start + 0.3
+
+                    k_parts = []
+                    for k in range(len(words)):
+                        kw = normalize_uzbek_text(str(words[k].get("word", "")))
+                        if k == w_idx:
+                            k_parts.append(f'<font color="{h_color}">{kw}</font>')
+                        else:
+                            k_parts.append(kw)
+
+                    lines.append(f"{cue_id}")
+                    lines.append(f"{seconds_to_srt_time(c_start)} --> {seconds_to_srt_time(c_end)}")
+                    lines.append(" ".join(k_parts))
+                    lines.append("")
+                    cue_id += 1
+
+            else:
+                # Standart rejim (jumla bo'yicha) — keyingi segment bilan to'qnashuvni oldini olish
+                next_seg = payload.segments[seg_idx + 1] if (seg_idx + 1 < len(payload.segments)) else None
+                if next_seg:
+                    next_s = float(next_seg.get("start", seg_end))
+                    if seg_end > next_s:
+                        seg_end = next_s
+                if seg_end <= seg_start:
+                    seg_end = round(seg_start + 0.35, 3)
+
+                start_str = seconds_to_srt_time(seg_start)
+                end_str = seconds_to_srt_time(seg_end)
+                lines.append(f"{cue_id}")
+                lines.append(f"{start_str} --> {end_str}")
+                lines.append(text)
+                lines.append("")
+                cue_id += 1
 
     srt_content = "\n".join(lines)
 

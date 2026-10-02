@@ -590,6 +590,18 @@ const HostBridge = {
                 }
             }
 
+            if (!chosenMogrt) {
+                const fallbackHormozi = "D:/plaginlar/05_MOGRT_va_Titlar (Essential Graphics)/Line by line Hormozi 02.mogrt";
+                if (typeof require !== "undefined") {
+                    try {
+                        const fs = require('fs');
+                        if (fs.existsSync(fallbackHormozi)) {
+                            chosenMogrt = fallbackHormozi;
+                        }
+                    } catch (e) {}
+                }
+            }
+
             // SO'ZMA-SO'Z REJIMI (PREMIERE PRO UCHUN BO'LAKLASH):
             if (styleOptions && styleOptions.wordByWord && styleOptions.wordMode) {
                 const wMode = styleOptions.wordMode;
@@ -604,10 +616,13 @@ const HostBridge = {
                         if (s.words && s.words.length > 0) {
                             for (let w = 0; w < s.words.length; w++) {
                                 const wo = s.words[w];
-                                const nextW = s.words[w + 1];
+                                const nextW = s.words[w + 1] || (timelineSegments[i + 1] && timelineSegments[i + 1].words && timelineSegments[i + 1].words[0]);
                                 const pauseAfter = (typeof wo.pause_after_ms === "number") ? wo.pause_after_ms : (nextW ? (nextW.start - wo.end) * 1000 : 0);
                                 let wEnd = wo.end;
                                 if (!pauseHide && nextW) {
+                                    wEnd = nextW.start;
+                                }
+                                if (nextW && wEnd > nextW.start) {
                                     wEnd = nextW.start;
                                 }
                                 singleWordSegs.push({
