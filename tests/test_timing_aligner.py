@@ -451,6 +451,59 @@ class TestTimingAligner(unittest.TestCase):
         self.assertEqual(chunks[0][0]["end"], 0.5)
         self.assertEqual(chunks[1][0]["start"], 1.7)
 
+    # 42. Sakoe-Chiba tor yo'lak (2s) 7 soniya uzoqdagi soxta moslikni to'xtatishi
+    def test_42_sakoe_chiba_narrow_window_prevents_false_matches_7s_away(self):
+        p = [
+            {"word": "AniLaverda", "start": 4.2, "end": 4.5},
+            {"word": "Nima", "start": 10.9, "end": 11.2},
+            {"word": "Rostdanmi", "start": 11.5, "end": 11.8},
+            {"word": "Mani", "start": 12.2, "end": 12.5}
+        ]
+        t = [
+            {"word": "AniLaverda", "start": 4.5, "end": 4.8},
+            {"word": "Mani", "start": 4.9, "end": 5.1}
+        ]
+        res = align_words_to_timed_words(p, t)
+        self.assertEqual(len(res), 4)
+        # 12.2s dagi "Mani" 4.9s ga tortilib ketmasligi kerak
+        self.assertFalse(res[3]["measured"])
+        self.assertGreater(res[3]["start"], 10.0)
+        # "Nima" va "Rostdanmi" 4.8s ga ezilib tiqilmasligi kerak
+        self.assertGreater(res[1]["start"], 8.0)
+        self.assertGreater(res[2]["start"], 9.0)
+
+    # 43. Anomal nisbatda (< 0.3 yoki > 3.0) mos kelmagan so'zlarni ezmaslik
+    def test_43_abnormal_ratio_does_not_compress_unmatched_words(self):
+        p = [
+            {"word": "bosh", "start": 1.0, "end": 1.5},
+            {"word": "oraliq", "start": 5.0, "end": 5.4},
+            {"word": "oxir", "start": 10.0, "end": 10.5}
+        ]
+        t = [
+            {"word": "bosh", "start": 1.0, "end": 1.4},
+            # Whisper "oxir"ni 2.0s da eshitdi (anomal qisqa oraliq)
+            {"word": "oxir", "start": 2.0, "end": 2.3}
+        ]
+        res = align_words_to_timed_words(p, t)
+        self.assertEqual(len(res), 3)
+        # "oraliq" o'zining asl 5.0s vaqtiga yaqin qolishi kerak, ezilmasligi shart
+        self.assertGreater(res[1]["start"], 3.5)
+
+    # 44. measure_and_align_words statistikasida avg_shift_sec mavjudligi va aniqligi
+    def test_44_measure_and_align_words_calculates_avg_shift_and_stats(self):
+        p = [
+            {"word": "bir", "start": 1.0, "end": 1.4},
+            {"word": "ikki", "start": 2.0, "end": 2.4}
+        ]
+        t = [
+            {"word": "bir", "start": 1.1, "end": 1.4},
+            {"word": "ikki", "start": 2.2, "end": 2.5}
+        ]
+        res = align_words_to_timed_words(p, t)
+        shifts = [abs(w["start"] - w["raw_start"]) for w in res if w.get("measured")]
+        avg_shift = sum(shifts) / len(shifts)
+        self.assertAlmostEqual(avg_shift, 0.15, places=2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

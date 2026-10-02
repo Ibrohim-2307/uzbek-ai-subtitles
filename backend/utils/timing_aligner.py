@@ -266,8 +266,8 @@ def transcribe_words_local(
             word_timestamps=True,
             condition_on_previous_text=False,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=200, speech_pad_ms=80),
-            beam_size=1,
+            vad_parameters=dict(min_silence_duration_ms=300, speech_pad_ms=300),
+            beam_size=2,
             temperature=0.0
         )
         return _extract_words(segments_generator)
@@ -281,8 +281,8 @@ def transcribe_words_local(
             word_timestamps=True,
             condition_on_previous_text=False,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=200, speech_pad_ms=80),
-            beam_size=1,
+            vad_parameters=dict(min_silence_duration_ms=300, speech_pad_ms=300),
+            beam_size=2,
             temperature=0.0
         )
         return _extract_words(segments_generator)
@@ -354,11 +354,12 @@ def align_words_to_timed_words(
             t_time = float(t_items[j - 1]["start"])
             time_diff = abs(p_time - t_time)
 
-            # Sakoe-Chiba vaqt yo'lagi: 15 soniyadan uzoqdagi so'zlar moslashtirilmaydi
-            if time_diff > 15.0:
+            # Sakoe-Chiba vaqt yo'lagi: 2 soniyadan uzoqdagi so'zlar moslashtirilmaydi (soxta uzoq mosliklarni to'xtatish)
+            MAX_TIME_DIFF = 2.0
+            if time_diff > MAX_TIME_DIFF:
                 match_score = -999.0
             else:
-                time_penalty = min(0.3, time_diff * 0.05)
+                time_penalty = min(0.8, (time_diff / MAX_TIME_DIFF) * 0.6)
                 sim = phonetic_similarity(pw, tw)
                 match_score = (sim - time_penalty) if sim >= min_similarity else -0.5
 
@@ -443,24 +444,28 @@ def align_words_to_timed_words(
                 meas_next_s = float(result[next_m]["start"])
                 orig_span = orig_next_s - orig_prev_e
                 meas_span = meas_next_s - meas_prev_e
-                if orig_span > 0.001 and meas_span > 0.001:
+                if orig_span > 0.001 and meas_span > 0.001 and 0.3 <= (meas_span / orig_span) <= 3.0:
                     ratio = meas_span / orig_span
                     calc_s = round(meas_prev_e + (orig_s - orig_prev_e) * ratio, 3)
                     calc_dur = max(0.08, orig_dur * ratio)
-                    result[i]["start"] = calc_s
-                    result[i]["end"] = round(calc_s + calc_dur, 3)
+                    if abs(calc_s - orig_s) <= 1.2:
+                        result[i]["start"] = calc_s
+                        result[i]["end"] = round(calc_s + calc_dur, 3)
+                    else:
+                        safe_s = max(meas_prev_e, min(meas_next_s - 0.08, orig_s))
+                        result[i]["start"] = round(safe_s, 3)
+                        result[i]["end"] = round(safe_s + orig_dur, 3)
                 else:
-                    num_unmatched = next_m - prev_m - 1
-                    unmatched_idx = i - prev_m - 1
-                    step = max(0.08, meas_span / float(num_unmatched + 1)) if meas_span > 0 else 0.08
-                    calc_s = round(meas_prev_e + unmatched_idx * step, 3)
-                    result[i]["start"] = calc_s
-                    result[i]["end"] = round(calc_s + step * 0.8, 3)
+                    safe_s = max(meas_prev_e, min(meas_next_s - 0.08, orig_s))
+                    result[i]["start"] = round(safe_s, 3)
+                    result[i]["end"] = round(safe_s + orig_dur, 3)
             elif prev_m is not None:
                 orig_prev_e = float(p_items[prev_m]["end"])
                 meas_prev_e = float(result[prev_m]["end"])
                 delta_s = max(0.04, orig_s - orig_prev_e)
                 calc_s = round(meas_prev_e + delta_s, 3)
+                if abs(calc_s - orig_s) > 1.2:
+                    calc_s = max(meas_prev_e, orig_s)
                 result[i]["start"] = calc_s
                 result[i]["end"] = round(calc_s + orig_dur, 3)
             elif next_m is not None:
@@ -468,8 +473,10 @@ def align_words_to_timed_words(
                 meas_next_s = float(result[next_m]["start"])
                 delta_s = max(0.04, orig_next_s - orig_s)
                 calc_s = max(0.0, round(meas_next_s - delta_s, 3))
-                result[i]["start"] = calc_s
-                result[i]["end"] = round(calc_s + orig_dur, 3)
+                if abs(calc_s - orig_s) > 1.2:
+                    calc_s = min(meas_next_s - 0.08, orig_s)
+                result[i]["start"] = max(0.0, calc_s)
+                result[i]["end"] = round(result[i]["start"] + orig_dur, 3)
 
     # Qat'iy monotonlik, no-overlap va minimal davomiylikni kafolatlash
     for i in range(N):
@@ -525,12 +532,17 @@ def measure_and_align_words(
 
         aligned = align_words_to_timed_words(provider_words, timed_words)
         matched_cnt = sum(1 for w in aligned if w.get("measured"))
+        total_cnt = max(1, len(provider_words))
+        match_ratio = round(matched_cnt / total_cnt, 2)
+        shifts = [abs(w["start"] - w.get("raw_start", w["start"])) for w in aligned if w.get("measured")]
+        avg_shift = round(float(sum(shifts) / len(shifts)), 3) if shifts else 0.0
 
         stats = {
             "engine": "local_whisper_measured",
             "matched_count": matched_cnt,
             "total": len(provider_words),
-            "match_ratio": round(matched_cnt / max(1, len(provider_words)), 2)
+            "match_ratio": match_ratio,
+            "avg_shift_sec": avg_shift
         }
         return aligned, stats, True
     except Exception as e:

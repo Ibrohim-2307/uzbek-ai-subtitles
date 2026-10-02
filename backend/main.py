@@ -489,8 +489,17 @@ async def transcribe_audio(
                             language=language or "uz"
                         )
                         if tw_ok and tw_words:
-                            alignment_method_used = "local_whisper_measured"
-                            all_raw_words = [WordItem(**tw) for tw in tw_words]
+                            match_ratio = tw_stats.get("match_ratio", 0.0)
+                            avg_shift = tw_stats.get("avg_shift_sec", 0.0)
+                            total_words = tw_stats.get("total", len(all_raw_words))
+                            # Ishonchlilik tekshiruvi: kamida 45% so'z mos tushishi va o'rtacha siljish <= 1.5s bo'lishi shart
+                            is_reliable = (match_ratio >= 0.45 or total_words <= 3) and (avg_shift <= 1.5)
+                            if is_reliable:
+                                alignment_method_used = "local_whisper_measured"
+                                all_raw_words = [WordItem(**tw) for tw in tw_words]
+                                print(f"[Timing Aligner] Muvaffaqiyatli tekislandi: {tw_stats.get('matched_count', 0)}/{total_words} ({match_ratio*100:.0f}%), avg_shift={avg_shift}s")
+                            else:
+                                print(f"[Timing Aligner] Whisper o'lchovi rad etildi (ishonchsiz): ratio={match_ratio}, avg_shift={avg_shift}s. Provayder vaqti saqlandi.")
                     except Exception as e:
                         print(f"[Timing Aligner] Whisper o'lchov xatosi: {e}")
                 else:
